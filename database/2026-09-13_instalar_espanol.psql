@@ -1,0 +1,9 @@
+\set ON_ERROR_STOP on
+-- SOLO para una base NUEVA VACIA. La base actual se corrige con la migracion 18.
+\ir 2026-09-12_00_cuenta_aplicacion.sql
+\ir 2026-09-12_16_esquema_espanol.sql
+\ir 2026-09-12_17_catalogos_espanol.sql
+\ir 2026-09-13_18_correcciones_desarrollo.sql
+\ir 2026-09-13_19_pruebas_regresion_espanol.sql
+\ir 2026-09-13_21_pruebas_correcciones.sql
+\echo Persistencia instalada y verificada en espanol, revision 2026-09-13.

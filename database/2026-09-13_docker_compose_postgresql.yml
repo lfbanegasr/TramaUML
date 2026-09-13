@@ -1,0 +1,28 @@
+name: uml-collab
+services:
+  postgresql:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: uml_collab
+      POSTGRES_USER: uml_admin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD antes de iniciar}
+      UML_APP_PASSWORD: ${UML_APP_PASSWORD:?Defina UML_APP_PASSWORD antes de iniciar}
+    ports:
+      - "127.0.0.1:${UML_DB_PORT:-55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U uml_admin -d uml_collab"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    volumes:
+      - uml_collab_pgdata:/var/lib/postgresql/data
+      - ./2026-09-12_00_cuenta_aplicacion.sql:/docker-entrypoint-initdb.d/00_cuenta_aplicacion.sql:ro
+      - ./2026-09-12_16_esquema_espanol.sql:/docker-entrypoint-initdb.d/01_esquema_espanol.sql:ro
+      - ./2026-09-12_17_catalogos_espanol.sql:/docker-entrypoint-initdb.d/02_catalogos_espanol.sql:ro
+      - ./2026-09-13_18_correcciones_desarrollo.sql:/docker-entrypoint-initdb.d/03_correcciones_desarrollo.sql:ro
+      - ./2026-09-12_09_credencial_runtime.sh:/docker-entrypoint-initdb.d/09_credencial_runtime.sh:ro
+      - ./2026-09-13_19_pruebas_regresion_espanol.sql:/docker-entrypoint-initdb.d/19_pruebas_regresion.sql:ro
+      - ./2026-09-13_21_pruebas_correcciones.sql:/docker-entrypoint-initdb.d/21_pruebas_correcciones.sql:ro
+volumes:
+  uml_collab_pgdata:
