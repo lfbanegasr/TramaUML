@@ -1,0 +1,31 @@
+spring:
+  application:
+    name: plataforma-uml
+  datasource:
+    url: ${UML_DB_URL:jdbc:postgresql://localhost:55432/uml_collab?currentSchema=uml_colaborativo,public}
+    username: ${UML_DB_USER:uml_app}
+    password: ${UML_DB_PASSWORD}
+    hikari:
+      maximum-pool-size: 10
+      connection-timeout: 5000
+      connection-init-sql: "SET statement_timeout = '15s'"
+  sql:
+    init:
+      mode: never
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+server:
+  address: ${UML_BIND_ADDRESS:127.0.0.1}
+  port: ${UML_PORT:8080}
+  error:
+    include-message: never
+    include-stacktrace: never
+uml:
+  cookie-secure: ${UML_COOKIE_SECURE:true}
+  bootstrap:
+    enabled: ${UML_BOOTSTRAP_ENABLED:false}
+    nombre-usuario: ${UML_ADMIN_USERNAME:}
+    correo: ${UML_ADMIN_EMAIL:}
+    nombre-completo: ${UML_ADMIN_NAME:}
+    contrasena: ${UML_ADMIN_PASSWORD:}
