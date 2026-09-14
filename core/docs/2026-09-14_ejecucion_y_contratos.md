@@ -1,6 +1,7 @@
 # Ejecución del núcleo y decisiones — 2026-09-14
 
 Este proyecto implementa el backend de la Plataforma Colaborativa de Modelado UML. La generación de backends para otros negocios y Flutter offline son fases posteriores, distintas de este servidor.
+Por indicación actual del usuario, Flutter queda aplazado. La versión actual es 0.2.0-SNAPSHOT; consultar [contratos del incremento 02](2026-09-14_incremento_02_contratos.md) y [convenciones de desarrollo](2026-09-14_convenciones_desarrollo.md).
 
 ## Requisitos locales
 
@@ -58,7 +59,7 @@ Inicio y cierre de sesión, consulta de proyectos autorizados con filtros/pagina
 
 El editor permite crear, editar y eliminar clases, atributos, operaciones y relaciones. Los parámetros se añaden, modifican y quitan dentro de la edición de una operación; conservan sus UUID y reciben orden según la lista enviada. La eliminación de una clase informa cuántos elementos serán afectados antes de pedir confirmación. Un lector recibe el modelo sin controles de escritura.
 
-Los campos de restricciones de atributos se conservan como JSON de dominio: no se ejecutan como SQL ni se interpretan todavía como reglas semánticas. La validación completa de tipos, el informe de CU14 y las reglas de generación están pendientes. También permanecen pendientes paquetes editables y dimensiones/rutas de conectores.
+El incremento 02 incorpora administración, miembros, paquetes jerárquicos e informes semánticos persistentes con procesamiento asíncrono. Las restricciones JSON tienen comprobaciones de estructura y coherencia documentadas; nunca se ejecutan como SQL. Permanecen pendientes las reglas completas de generación, compatibilidad XMI y dimensiones/rutas de conectores.
 
 ## Contratos del servidor
 
@@ -73,7 +74,7 @@ Los campos de restricciones de atributos se conservan como JSON de dominio: no s
 | GET /api/modelos/{id} | Lee el modelo y su revisión consistentemente |
 | POST /api/modelos/{id}/cambios | Confirma un lote de edición |
 
-Un cambio incluye idCambioCliente UUID, revisionBase y hasta 50 acciones. Cada acción declara operacion, entidad, idEntidad y datos. Entidades actuales: CLASE, ATRIBUTO, OPERACION y RELACION; acciones: CREAR, ACTUALIZAR, ELIMINAR y MOVER, donde MOVER corresponde a una clase. Los datos se comprueban mediante listas de campos permitidos, tipos y valores; el servidor obtiene el actor de la sesión y nunca acepta SQL libre.
+Un cambio incluye idCambioCliente UUID, revisionBase y hasta 50 acciones. Cada acción declara operacion, entidad, idEntidad y datos. Entidades actuales: CLASE, ATRIBUTO, OPERACION, RELACION y PAQUETE; acciones: CREAR, ACTUALIZAR, ELIMINAR y MOVER, donde MOVER corresponde a una clase. Los datos se comprueban mediante listas de campos permitidos, tipos y valores; el servidor obtiene el actor de la sesión y nunca acepta SQL libre. Las autorizaciones y API adicionales se describen en los contratos del incremento 02.
 
 Dentro de una transacción/conexión: autorizar, reconocer reenvío, iniciar_edicion_modelo, aplicar acciones JDBC, registrar cambio_modelo, guardar_version_modelo y commit. JDBC ejecuta inmediatamente y no necesita flush JPA. PostgreSQL genera la instantánea; no se modifica revision_actual ni se insertan snapshots desde Java. El listener AFTER_COMMIT está preparado, pero todavía no existe transporte WebSocket.
 
@@ -95,6 +96,7 @@ Desde Implementacion:
 ```
 
 Los parámetros -JavaHome, -Maven y -PostgresBin permiten usar rutas instaladas sin copiarlas al proyecto. El primer script comprueba el directorio del servidor aislado antes de crear una base nueva uml_collab_test_*, siempre en puerto distinto de 55432. Reutiliza .qa/postgres, instalado exclusivamente para pruebas; no borra bases ni volúmenes. Las cuatro fuentes SQL revisadas 00/16/17/18 se cargan únicamente en la base nueva ficticia.
+Después se aplica la migración de revocación de rol_permiso solo a esa base ficticia. Para repetir con los binarios PostgreSQL 17 portátiles disponibles en D:, usar -PostgresBin '.qa/tools/postgres17/pgsql/bin' -NombreCluster postgres17 -Puerto 55435; este nombre selecciona un clúster independiente del PostgreSQL 18 utilizado por defecto. La ruta PostgresBin debe ser absoluta si se cambia el directorio de trabajo.
 
 La autenticación trust del clúster de pruebas se limita al servidor vinculado a 127.0.0.1 y a datos ficticios; nunca se modifica pg_hba de la instalación real. Los tests del servidor además rechazan bases cuyo nombre no comienza por uml_collab_test_ y bases con usuarios existentes.
 
@@ -112,6 +114,6 @@ Se revisaron los flujos CU01, CU02, CU06, CU07 y CU10–14 de Documentacion/Docu
 
 Las especificaciones detalladas contienen 32 CU; la lista inicial y la tabla de ciclos no coinciden completamente. Se usa la secuencia solicitada por el usuario: CU01–14, CU15–20, CU21–26, CU27–32. No se atribuye esa corrección al docente.
 
-Seguir dentro del ciclo inicial: administración de usuarios/roles/permisos, miembros, ciclo de vida del proyecto, paquetes y validación semántica. Después colaboración e historial, revisión humana de propuestas de IA, XMI y generación/compilación/descarga. Flutter requiere voz, IA y persistencia locales sin Internet para negocios diversos. La interpretación docente de Vista en el backend generado continúa pendiente; DTO no se considera automáticamente esa capa.
+Seguir dentro del ciclo inicial: ciclo de vida del proyecto y pendientes detallados en el seguimiento del incremento 02. Después colaboración e historial, revisión humana de propuestas de IA, XMI y generación/compilación/descarga. Flutter queda aplazado por indicación del usuario; se conserva su requisito histórico de voz, IA y persistencia locales sin Internet para negocios diversos. La interpretación docente de Vista en el backend generado continúa pendiente; DTO no se considera automáticamente esa capa.
 
 Fuentes vigentes: Documentacion/Documentacion.docx y Documentacion/Contexto del primer parcial.docx (relativas a Primer parcial), docs/2026-09-13_guia_persistencia_corregida.md y docs/2026-09-13_diccionario_base_datos_vigente.md (relativas a Implementacion). Ninguna se modificó.

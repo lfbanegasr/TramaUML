@@ -8,7 +8,7 @@
     [string]$Nombre
 )
 $ErrorActionPreference='Stop'
-$jar=Join-Path ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))) 'backend\target\plataforma-0.1.0-SNAPSHOT.jar'
+$jar=Join-Path ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))) 'backend\target\plataforma-0.2.0-SNAPSHOT.jar'
 if(-not (Test-Path -LiteralPath $jar)) {throw 'Primero compila y empaqueta core/backend.'}
 $java=$null
 if($JavaHome) {
@@ -27,7 +27,7 @@ $versionJava=@(& $java --version)
 if($LASTEXITCODE -ne 0 -or -not ($versionJava -match '^(openjdk|java)\s+21([.\s]|$)')) {throw 'Este núcleo requiere Java 21. Usa -JavaHome con una instalación de esa versión.'}
 Write-Host ('Java verificado: ' + $java)
 if($VerificarEntorno) {Write-Host 'Java 21 y el archivo del backend están disponibles. No se solicitó ninguna contraseña ni se inició la aplicación.';return}
-$variables=@('UML_DB_PASSWORD','UML_COOKIE_SECURE','UML_BOOTSTRAP_ENABLED','UML_ADMIN_USERNAME','UML_ADMIN_EMAIL','UML_ADMIN_NAME','UML_ADMIN_PASSWORD')
+$variables=@('UML_DB_PASSWORD','UML_COOKIE_SECURE','UML_BOOTSTRAP_ENABLED','UML_ADMIN_USERNAME','UML_ADMIN_EMAIL','UML_ADMIN_NAME','UML_ADMIN_PASSWORD','LOGGING_FILE_NAME')
 $originalEnvironment=@{}
 foreach($variable in $variables) {$originalEnvironment[$variable]=[Environment]::GetEnvironmentVariable($variable,'Process')}
 function Read-Secret([string]$Mensaje) {
@@ -37,6 +37,11 @@ function Read-Secret([string]$Mensaje) {
     finally {[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer);$secureValue.Dispose()}
 }
 try {
+    if(-not $env:LOGGING_FILE_NAME) {
+        $registroDirectorio=Join-Path ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))) '.qa'
+        New-Item -ItemType Directory -Path $registroDirectorio -Force | Out-Null
+        $env:LOGGING_FILE_NAME=Join-Path $registroDirectorio ((Get-Date -Format 'yyyy-MM-dd')+'_plataforma.log')
+    }
     if(-not $env:UML_DB_PASSWORD) {$env:UML_DB_PASSWORD=Read-Secret 'Clave PostgreSQL vigente de uml_app (entrada oculta)'}
     if(-not $env:UML_DB_PASSWORD) {throw 'La clave PostgreSQL es obligatoria.'}
     $env:UML_COOKIE_SECURE=if($HttpLocal) {'false'} else {'true'}

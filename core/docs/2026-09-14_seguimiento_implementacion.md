@@ -1,4 +1,5 @@
 # Seguimiento vigente — 2026-09-14
+Estado actual: incremento 02 implementado y probado; consultar [seguimiento de administración, miembros, paquetes y validación](2026-09-14_seguimiento_incremento_02.md). El contenido siguiente conserva el registro del incremento 01. Flutter queda aplazado por indicación actual del usuario.
 
 Estado: desarrollo retomado. Primer incremento ejecutable comprobado con Spring Boot, React, Chrome y PostgreSQL aislado. Posteriormente el usuario resolvió la credencial de uml_app y ejecutó correctamente el bootstrap y el backend contra la instalación real; véase la confirmación de arranque al final. El asistente no restableció contraseñas.
 

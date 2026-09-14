@@ -1,13 +1,14 @@
-param(
+﻿param(
     [string]$PostgresBin = 'C:\Program Files\PostgreSQL\18\bin',
     [int]$Puerto = 55433,
+    [ValidateSet('postgres','postgres17')][string]$NombreCluster = 'postgres',
     [string]$Maven = 'mvn',
     [string]$JavaHome = $env:JAVA_HOME,
     [switch]$SoloPreparar
 )
 $ErrorActionPreference = 'Stop'
 $implementationRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
-$clusterRoot = Join-Path $implementationRoot '.qa\postgres'
+$clusterRoot = Join-Path $implementationRoot ('.qa\'+$NombreCluster)
 if ($Puerto -eq 55432 -or $Puerto -lt 1024 -or $Puerto -gt 65535) { throw 'El puerto debe ser exclusivo de pruebas y diferente de 55432.' }
 New-Item -ItemType Directory -Path $clusterRoot -Force | Out-Null
 $env:PGPASSWORD = ''
@@ -42,6 +43,7 @@ foreach ($sqlSource in @('2026-09-12_00_cuenta_aplicacion.sql','2026-09-12_16_es
     & (Join-Path $PostgresBin 'psql.exe') -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -p $Puerto -U uml_test_owner -d $testDatabase -f (Join-Path $implementationRoot ('database\'+$sqlSource)) *>> $installationLog
     if ($LASTEXITCODE -ne 0) { throw "Falló la instalación de $sqlSource; revisa $installationLog." }
 }
+Invoke-Pg 'psql.exe' @('-X','-v','ON_ERROR_STOP=1','-h','127.0.0.1','-p',"$Puerto",'-U','uml_test_owner','-d',$testDatabase,'-f',(Join-Path $implementationRoot 'core\docs\migraciones\2026-09-14_01_revocacion_permisos_rol.sql'))
 $env:UML_TEST_DB_URL = "jdbc:postgresql://127.0.0.1:$Puerto/$testDatabase" + '?currentSchema=uml_colaborativo,public'
 Invoke-Pg 'psql.exe' @('-X','-v','ON_ERROR_STOP=1','-h','127.0.0.1','-p',"$Puerto",'-U','uml_test_owner','-d',$testDatabase,'-c','ALTER ROLE uml_app LOGIN')
 Write-Output "Base ficticia preparada: $testDatabase (127.0.0.1:$Puerto). Se conserva para inspección."

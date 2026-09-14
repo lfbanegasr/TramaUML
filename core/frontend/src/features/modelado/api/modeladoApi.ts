@@ -1,14 +1,106 @@
 import { api } from '../../../shared/api';
-export type Clase = { id: string; nombre: string; descripcion: string | null; estereotipo: string | null; visibilidad: string; es_abstracto: boolean; es_persistente: boolean; id_paquete: string | null; x: number; y: number; ancho: number; alto: number };
-export type Atributo = { id: string; id_clase: string; nombre: string; tipo_uml: string; visibilidad: string; multiplicidad_minima: number; multiplicidad_maxima: number | null; es_identificador: boolean; es_estatico: boolean; es_unico: boolean; valor_predeterminado: string | null; restricciones_json: string };
-export type Operacion = { id: string; id_clase: string; nombre: string; tipo_retorno: string | null; visibilidad: string; es_estatico: boolean; es_abstracto: boolean };
-export type Parametro = { id: string; id_operacion: string; nombre: string; tipo_uml: string; direccion: string; es_obligatorio: boolean; valor_predeterminado: string | null; orden: number };
-export type Relacion = { id: string; id_clase_origen: string; id_clase_destino: string; nombre: string | null; tipo_relacion: string; direccion: string; rol_origen: string | null; rol_destino: string | null; minimo_origen: number | null; maximo_origen: number | null; minimo_destino: number | null; maximo_destino: number | null };
-export type Modelo = { id: string; nombre: string; revision: number; idVersion: string; puedeEditar: boolean; clases: Clase[]; atributos: Atributo[]; operaciones: Operacion[]; parametros: Parametro[]; relaciones: Relacion[]; paquetes: { id: string; nombre: string }[] };
-export type Accion = { operacion: 'CREAR' | 'ACTUALIZAR' | 'ELIMINAR' | 'MOVER'; entidad: 'CLASE' | 'ATRIBUTO' | 'OPERACION' | 'RELACION'; idEntidad: string; datos?: Record<string, unknown> };
+export type Clase = {
+  id: string;
+  nombre: string;
+  descripcion: string | null;
+  estereotipo: string | null;
+  visibilidad: string;
+  es_abstracto: boolean;
+  es_persistente: boolean;
+  id_paquete: string | null;
+  x: number;
+  y: number;
+  ancho: number;
+  alto: number;
+};
+export type Atributo = {
+  id: string;
+  id_clase: string;
+  nombre: string;
+  tipo_uml: string;
+  visibilidad: string;
+  multiplicidad_minima: number;
+  multiplicidad_maxima: number | null;
+  es_identificador: boolean;
+  es_estatico: boolean;
+  es_unico: boolean;
+  valor_predeterminado: string | null;
+  restricciones_json: string;
+};
+export type Operacion = {
+  id: string;
+  id_clase: string;
+  nombre: string;
+  tipo_retorno: string | null;
+  visibilidad: string;
+  es_estatico: boolean;
+  es_abstracto: boolean;
+};
+export type Parametro = {
+  id: string;
+  id_operacion: string;
+  nombre: string;
+  tipo_uml: string;
+  direccion: string;
+  es_obligatorio: boolean;
+  valor_predeterminado: string | null;
+  orden: number;
+};
+export type Relacion = {
+  id: string;
+  id_clase_origen: string;
+  id_clase_destino: string;
+  nombre: string | null;
+  tipo_relacion: string;
+  direccion: string;
+  rol_origen: string | null;
+  rol_destino: string | null;
+  minimo_origen: number | null;
+  maximo_origen: number | null;
+  minimo_destino: number | null;
+  maximo_destino: number | null;
+};
+export type Paquete = {
+  id: string;
+  nombre: string;
+  descripcion: string | null;
+  id_paquete_padre: string | null;
+};
+export type Modelo = {
+  id: string;
+  nombre: string;
+  revision: number;
+  idVersion: string;
+  puedeEditar: boolean;
+  puedeOrganizar: boolean;
+  puedeValidar: boolean;
+  clases: Clase[];
+  atributos: Atributo[];
+  operaciones: Operacion[];
+  parametros: Parametro[];
+  relaciones: Relacion[];
+  paquetes: Paquete[];
+};
+export type Accion = {
+  operacion: 'CREAR' | 'ACTUALIZAR' | 'ELIMINAR' | 'MOVER';
+  entidad: 'CLASE' | 'ATRIBUTO' | 'OPERACION' | 'RELACION' | 'PAQUETE';
+  idEntidad: string;
+  datos?: Record<string, unknown>;
+};
 export type Cambio = { idCambioCliente: string; revisionBase: number; acciones: Accion[] };
-export type Confirmacion = { idCambioCliente: string; revision: number; idVersion: string; repetido: boolean };
+export type Confirmacion = {
+  idCambioCliente: string;
+  revision: number;
+  idVersion: string;
+  repetido: boolean;
+};
 export const leerModelo = (id: string) => api<Modelo>('/modelos/' + id);
-export const aplicarCambio = (id: string, cambio: Cambio) => api<Confirmacion>('/modelos/' + id + '/cambios', { method: 'POST', body: JSON.stringify(cambio) });
-export const simbolo = (v: string) => ({ PUBLICO: '+', PRIVADO: '−', PROTEGIDO: '#', PAQUETE: '~' })[v] ?? '';
-export const multiplicidad = (min: number | null, max: number | null) => min === null ? '' : min === max ? String(min) : String(min) + '..' + (max === null ? '*' : max);
+export const aplicarCambio = (id: string, cambio: Cambio) =>
+  api<Confirmacion>('/modelos/' + id + '/cambios', {
+    method: 'POST',
+    body: JSON.stringify(cambio),
+  });
+export const simbolo = (v: string) =>
+  ({ PUBLICO: '+', PRIVADO: '−', PROTEGIDO: '#', PAQUETE: '~' })[v] ?? '';
+export const multiplicidad = (min: number | null, max: number | null) =>
+  min === null ? '' : min === max ? String(min) : String(min) + '..' + (max === null ? '*' : max);
