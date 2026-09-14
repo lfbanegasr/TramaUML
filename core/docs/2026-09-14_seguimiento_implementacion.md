@@ -1,6 +1,6 @@
 # Seguimiento vigente — 2026-09-14
 
-Estado: desarrollo retomado. Primer incremento ejecutable comprobado con Spring Boot, React, Chrome y PostgreSQL aislado. La conexión TCP a la instalación real aún requiere la clave vigente de uml_app; la clave anterior fue rechazada y no se cambió.
+Estado: desarrollo retomado. Primer incremento ejecutable comprobado con Spring Boot, React, Chrome y PostgreSQL aislado. Posteriormente el usuario resolvió la credencial de uml_app y ejecutó correctamente el bootstrap y el backend contra la instalación real; véase la confirmación de arranque al final. El asistente no restableció contraseñas.
 
 ## Incremento técnico cerrado
 
@@ -60,6 +60,10 @@ Corrección de arranque del 14 de septiembre: JAVA_HOME señalaba un JDK Eclipse
 
 Consultar 2026-09-14_ejecucion_y_contratos.md para compilar, iniciar el administrador propio, ejecutar React y repetir pruebas. 2026-09-14_ejecutar_backend.ps1 solicita secretos con entrada oculta; no exige publicarlos en el chat.
 
-Siguiente incremento dentro del ciclo inicial: auditoría de acceso, administración de usuarios/roles/permisos y miembros, completar filtros/resumen/ciclo de vida del proyecto, paquetes y el informe de validación de CU14. Recuperar la conexión externa de uml_app y ejecutar el núcleo con el administrador elegido por el usuario antes de declarar la instalación real funcional.
+Siguiente incremento dentro del ciclo inicial: auditoría de acceso, administración de usuarios/roles/permisos y miembros, completar filtros/resumen/ciclo de vida del proyecto, paquetes y el informe de validación de CU14. Confirmar el recorrido de inicio de sesión y edición desde el navegador en la instalación real con el administrador elegido por el usuario.
 
 Los módulos de IA, intercambio XMI y generación todavía no se desarrollaron. La IA deberá producir propuestas revisables; los servicios ejecutarán validación, generación y compilación. Flutter debe ejecutar reconocimiento, IA y persistencia locales sin Internet. El backend de esta plataforma y el backend de negocios que se generará siguen separados.
+
+## Confirmación posterior del arranque real
+
+La salida compartida por el usuario registra el 14 de septiembre a las 01:11: conexión psql como uml_app a uml_collab; mensaje de primer administrador inicializado; cierre normal del proceso de bootstrap; arranque posterior HTTP en 8080 con conexión Hikari completada. El cierre del bootstrap es intencional. El asistente comprobó después HTTP 200 en http://127.0.0.1:8080/api/acceso/csrf y http://127.0.0.1:5173/. Esto confirma el arranque y la disponibilidad HTTP; todavía no demuestra el recorrido autenticado del usuario ni sustituye la suite pendiente de aplicación en PostgreSQL 17. No se copiaron secretos ni la salida privada al repositorio.
