@@ -56,6 +56,8 @@ Se mantiene la organización actual solicitada CU01–14 / CU15–20 / CU21–26
 
 ## Ejecución y siguiente paso
 
+Corrección de arranque del 14 de septiembre: JAVA_HOME señalaba un JDK Eclipse Adoptium inexistente. El lanzador ahora valida Java 21 antes de pedir secretos, detecta instalaciones locales y permite -VerificarEntorno. Se comprobó este modo con Windows PowerShell y el JBR 21 de Android Studio, sin iniciar el backend ni modificar PostgreSQL. El script usa UTF-8 con BOM para que Windows PowerShell muestre correctamente los acentos. Esta comprobación no confirma todavía la autenticación con la base real.
+
 Consultar 2026-09-14_ejecucion_y_contratos.md para compilar, iniciar el administrador propio, ejecutar React y repetir pruebas. 2026-09-14_ejecutar_backend.ps1 solicita secretos con entrada oculta; no exige publicarlos en el chat.
 
 Siguiente incremento dentro del ciclo inicial: auditoría de acceso, administración de usuarios/roles/permisos y miembros, completar filtros/resumen/ciclo de vida del proyecto, paquetes y el informe de validación de CU14. Recuperar la conexión externa de uml_app y ejecutar el núcleo con el administrador elegido por el usuario antes de declarar la instalación real funcional.

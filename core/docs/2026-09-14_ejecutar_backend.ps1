@@ -1,5 +1,6 @@
-param(
+﻿param(
     [string]$JavaHome = $env:JAVA_HOME,
+    [switch]$VerificarEntorno,
     [switch]$HttpLocal,
     [switch]$InicializarAdministrador,
     [string]$Usuario,
@@ -9,7 +10,23 @@ param(
 $ErrorActionPreference='Stop'
 $jar=Join-Path ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))) 'backend\target\plataforma-0.1.0-SNAPSHOT.jar'
 if(-not (Test-Path -LiteralPath $jar)) {throw 'Primero compila y empaqueta core/backend.'}
-$java=if($JavaHome) {Join-Path $JavaHome 'bin\java.exe'} else {(Get-Command java).Source}
+$java=$null
+if($JavaHome) {
+    $candidato=Join-Path $JavaHome 'bin\java.exe'
+    if(Test-Path -LiteralPath $candidato -PathType Leaf) {$java=$candidato}
+    elseif($PSBoundParameters.ContainsKey('JavaHome')) {throw 'La ruta indicada en -JavaHome no contiene bin\java.exe.'}
+    else {Write-Warning 'JAVA_HOME apunta a una instalación que no existe. Se buscará otra instalación local.'}
+}
+if(-not $java) {
+    $javaEnPath=Get-Command java.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if($javaEnPath) {$java=$javaEnPath.Source}
+    elseif(Test-Path -LiteralPath 'C:\Program Files\Android\Android Studio\jbr\bin\java.exe' -PathType Leaf) {$java='C:\Program Files\Android\Android Studio\jbr\bin\java.exe'}
+}
+if(-not $java) {throw 'No se encontró Java 21. Usa -JavaHome con la carpeta de un JDK 21 instalado.'}
+$versionJava=@(& $java --version)
+if($LASTEXITCODE -ne 0 -or -not ($versionJava -match '^(openjdk|java)\s+21([.\s]|$)')) {throw 'Este núcleo requiere Java 21. Usa -JavaHome con una instalación de esa versión.'}
+Write-Host ('Java verificado: ' + $java)
+if($VerificarEntorno) {Write-Host 'Java 21 y el archivo del backend están disponibles. No se solicitó ninguna contraseña ni se inició la aplicación.';return}
 $variables=@('UML_DB_PASSWORD','UML_COOKIE_SECURE','UML_BOOTSTRAP_ENABLED','UML_ADMIN_USERNAME','UML_ADMIN_EMAIL','UML_ADMIN_NAME','UML_ADMIN_PASSWORD')
 $originalEnvironment=@{}
 foreach($variable in $variables) {$originalEnvironment[$variable]=[Environment]::GetEnvironmentVariable($variable,'Process')}

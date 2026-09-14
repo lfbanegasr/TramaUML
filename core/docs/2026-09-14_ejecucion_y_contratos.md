@@ -27,6 +27,8 @@ No hay una cuenta ni contraseña predeterminadas. La base original tenía cero u
 
 El script solicita la clave existente de uml_app y la nueva contraseña personal del administrador mediante entrada oculta. Solo las mantiene temporalmente en variables del proceso y restablece el entorno al finalizar. No guarda un archivo de credenciales. La contraseña de PostgreSQL y la contraseña de acceso a la plataforma son diferentes conceptos.
 
+Antes de solicitar claves, el script verifica Java 21 y el JAR. Si JAVA_HOME apunta a una carpeta inexistente, busca Java en PATH y después en Android Studio. Puede indicarse una instalación explícita con -JavaHome 'C:/Program Files/Android/Android Studio/jbr'. No modifica JAVA_HOME del sistema. Para comprobar únicamente el entorno: ./core/docs/2026-09-14_ejecutar_backend.ps1 -VerificarEntorno. Una ruta explícita inválida o una versión distinta de 21 detiene el comando antes de pedir secretos.
+
 ```powershell
 ./core/docs/2026-09-14_ejecutar_backend.ps1 -InicializarAdministrador
 ```
