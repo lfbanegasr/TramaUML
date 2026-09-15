@@ -22,10 +22,12 @@ export function EditorPage({
   proyecto,
   volver,
   registrarSalida,
+  registrarFinalizador,
 }: {
   proyecto: Proyecto;
   volver: () => void;
   registrarSalida: (g: (() => boolean) | null) => void;
+  registrarFinalizador: (f: (() => Promise<void>) | null) => void;
 }) {
   const m = useModelo(proyecto.idModelo);
   const [nodes, setNodes] = useState<ClaseNodo[]>([]),
@@ -33,6 +35,10 @@ export function EditorPage({
   const [borrador, setBorrador] = useState<Borrador | null>(null);
   const [informe, setInforme] = useState(false);
   const flujo = useRef<ReactFlowInstance<ClaseNodo, RelacionArista> | null>(null);
+  const finalizarRef = useRef(m.salir),
+    enfocarRef = useRef(m.enfocar);
+  finalizarRef.current = m.salir;
+  enfocarRef.current = m.enfocar;
   useEffect(() => {
     if (m.modelo)
       setNodes(
@@ -71,10 +77,35 @@ export function EditorPage({
       window.removeEventListener('beforeunload', antesDeSalir);
     };
   }, [borrador, m.enviando, m.pendiente, registrarSalida]);
+  useEffect(() => {
+    registrarFinalizador(() => finalizarRef.current());
+    return () => registrarFinalizador(null);
+  }, [registrarFinalizador]);
+  useEffect(() => {
+    m.registrarBorrador(!!borrador);
+    return () => m.registrarBorrador(false);
+  }, [borrador, m.registrarBorrador]);
+  useEffect(() => {
+    if (!seleccion) enfocarRef.current(null, null);
+    else if (m.modelo?.clases.some((c) => c.id === seleccion))
+      enfocarRef.current('CLASE', seleccion);
+    else if (m.modelo?.relaciones.some((r) => r.id === seleccion))
+      enfocarRef.current('RELACION', seleccion);
+    else if (m.modelo?.paquetes.some((p) => p.id === seleccion))
+      enfocarRef.current('PAQUETE', seleccion);
+  }, [seleccion, m.modelo?.clases, m.modelo?.relaciones, m.modelo?.paquetes]);
   const clase = m.modelo?.clases.find((c) => c.id === seleccion);
   const relacion = m.modelo?.relaciones.find((r) => r.id === seleccion);
   const paquete = m.modelo?.paquetes.find((p) => p.id === seleccion);
-  const bloqueado = m.enviando || !!m.pendiente || m.conflicto || m.desactualizado;
+  const puedeEditar =
+    m.modelo?.puedeEditar && m.sesion?.modoPropio === 'EDITOR' && m.colaboracion === 'CONECTADO';
+  const puedeOrganizar = puedeEditar && m.modelo?.puedeOrganizar;
+  const bloqueado =
+    m.enviando ||
+    !!m.pendiente ||
+    m.conflicto ||
+    m.desactualizado ||
+    m.colaboracion !== 'CONECTADO';
   const edges: RelacionArista[] =
     m.modelo?.relaciones.map((r) => ({
       id: r.id,
@@ -131,7 +162,7 @@ export function EditorPage({
     if (await m.cambiar({ operacion: 'ELIMINAR', entidad, idEntidad: id })) setBorrador(null);
   }
   function conectar(c: Connection) {
-    if (m.modelo?.puedeEditar && !bloqueado && !borrador && c.source && c.target)
+    if (puedeEditar && !bloqueado && !borrador && c.source && c.target)
       setBorrador({
         entidad: 'RELACION',
         nuevo: true,
@@ -166,7 +197,7 @@ export function EditorPage({
         <span>◇ {m.modelo.nombre}</span>
         <div>
           <button onClick={() => setInforme((v) => !v)}>Informe de validación</button>
-          {m.modelo.puedeOrganizar && (
+          {puedeOrganizar && (
             <button
               disabled={bloqueado || !!borrador}
               onClick={() =>
@@ -179,7 +210,7 @@ export function EditorPage({
           <button onClick={m.recargar} disabled={m.enviando || (!!m.pendiente && !m.conflicto)}>
             ↻ Recargar modelo
           </button>
-          {m.modelo.puedeEditar && (
+          {puedeEditar && (
             <>
               <button
                 disabled={bloqueado || !!borrador || !m.modelo.clases.length}
@@ -200,6 +231,24 @@ export function EditorPage({
               </button>
             </>
           )}
+        </div>
+      </div>
+      <div className="presence-strip" aria-label="Participantes conectados">
+        <span className={'connection-state ' + m.colaboracion.toLowerCase()}>
+          {m.colaboracion === 'CONECTADO'
+            ? 'Colaboración conectada'
+            : m.colaboracion === 'CONECTANDO'
+              ? 'Conectando colaboración…'
+              : 'Colaboración limitada'}
+        </span>
+        <div>
+          {m.sesion?.participantes.map((p) => (
+            <span className={'participant ' + p.estado.toLowerCase()} key={p.idUsuario}>
+              <b>{p.nombre}</b> · {p.modo === 'EDITOR' ? 'editor' : 'lector'} ·{' '}
+              {p.estado === 'EN_LINEA' ? 'en línea' : 'ausente'}
+              {p.tipoEntidadEnfocada ? ' · ' + p.tipoEntidadEnfocada.toLowerCase() : ''}
+            </span>
+          ))}
         </div>
       </div>
       {m.error && (
@@ -285,7 +334,7 @@ export function EditorPage({
             </>
           )}
           <p className="outline-note">
-            {m.modelo.puedeEditar
+            {puedeEditar
               ? 'Arrastra las clases para organizarlas. Conecta sus puntos para proponer una relación.'
               : 'Tienes acceso de solo lectura a este modelo.'}
           </p>
@@ -301,8 +350,8 @@ export function EditorPage({
             onInit={(instancia) => {
               flujo.current = instancia;
             }}
-            nodesDraggable={m.modelo.puedeOrganizar && !bloqueado && !borrador}
-            nodesConnectable={m.modelo.puedeEditar && !bloqueado && !borrador}
+            nodesDraggable={!!puedeOrganizar && !bloqueado && !borrador}
+            nodesConnectable={!!puedeEditar && !bloqueado && !borrador}
             deleteKeyCode={null}
             onNodesChange={(changes) => setNodes((ns) => applyNodeChanges(changes, ns))}
             onNodeClick={(_, n) => {
@@ -338,7 +387,7 @@ export function EditorPage({
               <span>◇</span>
               <h2>Un lienzo para tu sistema</h2>
               <p>
-                {m.modelo.puedeEditar
+                {puedeEditar
                   ? 'Añade tu primera clase para empezar a modelar.'
                   : 'Este modelo todavía no tiene clases.'}
               </p>
@@ -372,7 +421,7 @@ export function EditorPage({
                       {simbolo(a.visibilidad)} {a.nombre}: {a.tipo_uml}
                       {a.es_identificador ? ' {id}' : ''}
                     </span>
-                    {m.modelo!.puedeEditar && (
+                    {puedeEditar && (
                       <div>
                         <button
                           disabled={bloqueado}
@@ -400,7 +449,7 @@ export function EditorPage({
                     )}
                   </div>
                 ))}
-              {m.modelo.puedeEditar && (
+              {puedeEditar && (
                 <button
                   className="wide"
                   disabled={bloqueado}
@@ -424,7 +473,7 @@ export function EditorPage({
                     <span>
                       {o.nombre}(): {o.tipo_retorno ?? 'void'}
                     </span>
-                    {m.modelo!.puedeEditar && (
+                    {puedeEditar && (
                       <div>
                         <button
                           disabled={bloqueado}
@@ -452,7 +501,7 @@ export function EditorPage({
                     )}
                   </div>
                 ))}
-              {m.modelo.puedeEditar && (
+              {puedeEditar && (
                 <>
                   <button
                     className="wide"
@@ -496,7 +545,7 @@ export function EditorPage({
                 {multiplicidad(relacion.minimo_origen, relacion.maximo_origen)} →{' '}
                 {multiplicidad(relacion.minimo_destino, relacion.maximo_destino)}
               </p>
-              {m.modelo.puedeEditar && (
+              {puedeEditar && (
                 <>
                   <button
                     disabled={bloqueado}
@@ -525,7 +574,7 @@ export function EditorPage({
                 {m.modelo.paquetes.filter((p) => p.id_paquete_padre === paquete.id).length}{' '}
                 subpaquetes
               </p>
-              {m.modelo.puedeOrganizar && (
+              {puedeOrganizar && (
                 <>
                   <button
                     disabled={bloqueado}
@@ -557,7 +606,7 @@ export function EditorPage({
           {m.modelo.clases.length} clases · {m.modelo.atributos.length} atributos ·{' '}
           {m.modelo.operaciones.length} operaciones · {m.modelo.relaciones.length} relaciones
         </span>
-        <span>{m.modelo.puedeEditar ? 'Permiso de edición' : 'Solo lectura'}</span>
+        <span>{puedeEditar ? 'Edición colaborativa' : 'Solo lectura'}</span>
       </footer>
     </div>
   );

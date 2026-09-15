@@ -183,8 +183,15 @@ test('actividad paginada, filtros, valores UML y versión vinculada consultan pe
     expect(r.status()).toBe(200);
     revision = (await r.json()).revision;
   }
+  const apertura = page.waitForResponse(
+    (r) => r.url().endsWith('/sesiones') && r.request().method() === 'POST',
+  );
+  await page.getByRole('button', { name: /Abrir modelo/ }).click();
+  const sesion = await (await apertura).json();
+  await expect(page.getByText('Colaboración conectada')).toBeVisible();
   const entidad = crypto.randomUUID();
   const cambio = await escribir(page.request, '/modelos/' + p.idModelo + '/cambios', {
+    idSesionEdicion: sesion.id,
     revisionBase: 1,
     idCambioCliente: crypto.randomUUID(),
     acciones: [
@@ -198,15 +205,25 @@ test('actividad paginada, filtros, valores UML y versión vinculada consultan pe
   });
   expect(cambio.status()).toBe(200);
   const version = (await cambio.json()).idVersion;
+  await page
+    .getByRole('button', { name: /Proyectos/, exact: false })
+    .first()
+    .click();
   await resumen(page);
   await page.getByRole('button', { name: 'Actividad', exact: true }).click();
   await page.getByLabel('Eventos por página').selectOption('10');
+  const actividadCompleta = await (
+    await page.request.get('/api/proyectos/' + p.id + '/actividad?tamano=10')
+  ).json();
+  expect(actividadCompleta.total).toBeGreaterThan(10);
   await expect(page.locator('.activity-panel tbody tr')).toHaveCount(10);
   const ids = await page.getByRole('button', { name: /Detalle del evento/ }).allTextContents();
   expect(ids).toHaveLength(10);
   await page.getByRole('button', { name: 'Actividad siguiente' }).click();
   await expect(page.locator('.activity-panel .pagination')).toContainText('Página 2');
-  await expect(page.locator('.activity-panel tbody tr')).toHaveCount(5);
+  await expect(page.locator('.activity-panel tbody tr')).toHaveCount(
+    Math.min(10, actividadCompleta.total - 10),
+  );
   let falloConsulta = true;
   await page.route('**/api/proyectos/' + p.id + '/actividad?*', async (route) => {
     if (falloConsulta) {

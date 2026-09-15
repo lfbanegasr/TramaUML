@@ -1,6 +1,7 @@
 package bo.edu.uml.modelado.servicio;
 
 import bo.edu.uml.acceso.modelo.Identidad;
+import bo.edu.uml.colaboracion.servicio.ColaboracionServicio;
 import bo.edu.uml.compartido.ApiException;
 import bo.edu.uml.modelado.dto.ModeladoDto.*;
 import bo.edu.uml.modelado.repositorio.*;
@@ -19,21 +20,25 @@ public class EdicionTransaccional {
     private final ApplicationEventPublisher eventos;
     private final ActividadElementoRepositorio valores;
     private final ActividadRepositorio actividad;
+    private final ColaboracionServicio colaboracion;
 
     public EdicionTransaccional(
             ModeloRepositorio modelos,
             ElementoRepositorio elementos,
             ApplicationEventPublisher eventos,
             ActividadElementoRepositorio valores,
-            ActividadRepositorio actividad) {
+            ActividadRepositorio actividad,
+            ColaboracionServicio colaboracion) {
         this.modelos = modelos;
         this.elementos = elementos;
         this.eventos = eventos;
         this.valores = valores;
         this.actividad = actividad;
+        this.colaboracion = colaboracion;
     }
 
-    public record ModeloConfirmado(UUID modelo, UUID actor, long revision, UUID version) {}
+    public record ModeloConfirmado(
+            UUID modelo, UUID sesion, UUID cambio, UUID actor, long revision, UUID version) {}
 
     @Transactional
     public Confirmacion aplicar(Identidad actor, UUID modelo, Cambio cambio, String parche) {
@@ -41,11 +46,13 @@ public class EdicionTransaccional {
         var previo =
                 modelos.repeticion(
                         modelo,
+                        cambio.idSesionEdicion(),
                         cambio.idCambioCliente(),
                         actor.id(),
                         cambio.revisionBase(),
                         parche);
         if (previo.isPresent()) return previo.get();
+        colaboracion.validarCambio(actor, modelo, cambio.idSesionEdicion());
         long revision = modelos.iniciar(modelo, cambio.revisionBase(), actor.id());
         UUID proyecto = modelos.cabecera(modelo).proyecto();
         record Registro(Accion accion, String anterior, String posterior) {}
@@ -72,6 +79,7 @@ public class EdicionTransaccional {
         Accion primera = cambio.acciones().getFirst();
         modelos.registrar(
                 modelo,
+                cambio.idSesionEdicion(),
                 cambio.idCambioCliente(),
                 actor.id(),
                 cambio.revisionBase(),
@@ -87,6 +95,7 @@ public class EdicionTransaccional {
                         revision,
                         actor.id(),
                         "Edición manual: " + cambio.acciones().size() + " operación(es)");
+        colaboracion.confirmarActividad(cambio.idSesionEdicion());
         for (int i = 0; i < registros.size(); i++) {
             var r = registros.get(i);
             actividad.registrar(
@@ -104,6 +113,8 @@ public class EdicionTransaccional {
                             Map.of(
                                     "idCambioCliente",
                                     cambio.idCambioCliente(),
+                                    "idSesionEdicion",
+                                    cambio.idSesionEdicion(),
                                     "indiceAccion",
                                     i,
                                     "revisionBase",
@@ -111,7 +122,14 @@ public class EdicionTransaccional {
                                     "revisionAplicada",
                                     revision)));
         }
-        eventos.publishEvent(new ModeloConfirmado(modelo, actor.id(), revision, version));
+        eventos.publishEvent(
+                new ModeloConfirmado(
+                        modelo,
+                        cambio.idSesionEdicion(),
+                        cambio.idCambioCliente(),
+                        actor.id(),
+                        revision,
+                        version));
         return new Confirmacion(cambio.idCambioCliente(), revision, version, false);
     }
 
@@ -120,7 +138,12 @@ public class EdicionTransaccional {
             Identidad actor, UUID modelo, Cambio cambio, String parche) {
         autorizar(actor, modelo, "EDITAR_MODELO", false);
         return modelos.repeticion(
-                modelo, cambio.idCambioCliente(), actor.id(), cambio.revisionBase(), parche);
+                modelo,
+                cambio.idSesionEdicion(),
+                cambio.idCambioCliente(),
+                actor.id(),
+                cambio.revisionBase(),
+                parche);
     }
 
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)

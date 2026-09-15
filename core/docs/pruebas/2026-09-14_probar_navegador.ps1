@@ -7,7 +7,7 @@
 $ErrorActionPreference='Stop'
 $implementationRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
 $coreRoot=Join-Path $implementationRoot 'core'
-$jar=Join-Path $coreRoot 'backend\target\plataforma-0.3.0-SNAPSHOT.jar'
+$jar=Join-Path $coreRoot 'backend\target\plataforma-0.4.0-SNAPSHOT.jar'
 if(-not (Test-Path -LiteralPath $jar)) {throw 'Primero empaqueta el backend.'}
 if($PuertoBackend -eq 8080 -or $PuertoWeb -eq 5173 -or $PuertoBackend -eq $PuertoWeb) {throw 'Utiliza puertos exclusivos para pruebas.'}
 $envNames=@('UML_DB_URL','UML_DB_USER','UML_DB_PASSWORD','UML_COOKIE_SECURE','UML_BOOTSTRAP_ENABLED','UML_ADMIN_USERNAME','UML_ADMIN_EMAIL','UML_ADMIN_NAME','UML_ADMIN_PASSWORD','UML_PORT','UML_API_PROXY_TARGET','UML_E2E_URL','UML_E2E_USERNAME','UML_E2E_PASSWORD','UML_TEST_DB_URL','UML_TEST_DB_PASSWORD','PGPASSWORD','PGCONNECT_TIMEOUT','JAVA_HOME')

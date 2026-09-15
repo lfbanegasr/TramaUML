@@ -18,8 +18,12 @@ export function App() {
     setAdministracion(false);
   }, [sesion?.usuario.id]);
   const guardia = useRef<(() => boolean) | null>(null);
+  const finalizador = useRef<(() => Promise<void>) | null>(null);
   const registrarSalida = useCallback((g: (() => boolean) | null) => {
     guardia.current = g;
+  }, []);
+  const registrarFinalizador = useCallback((f: (() => Promise<void>) | null) => {
+    finalizador.current = f;
   }, []);
   function puedeSalir() {
     if (guardia.current && !guardia.current()) {
@@ -29,10 +33,16 @@ export function App() {
     setError('');
     return true;
   }
-  function volver() {
+  async function volver() {
     if (puedeSalir()) {
-      setProyecto(null);
-      setAdministracion(false);
+      try {
+        await finalizador.current?.();
+        finalizador.current = null;
+        setProyecto(null);
+        setAdministracion(false);
+      } catch (e) {
+        setError((e as Error).message);
+      }
     }
   }
   if (cargando) return <div className="empty">Abriendo tu espacio…</div>;
@@ -40,6 +50,8 @@ export function App() {
   async function cerrar() {
     if (!puedeSalir()) return;
     try {
+      await finalizador.current?.();
+      finalizador.current = null;
       await salir();
       setProyecto(null);
       setAdministracion(false);
@@ -66,10 +78,16 @@ export function App() {
           )) && (
           <button
             className={administracion ? 'nav-item selected' : 'nav-item'}
-            onClick={() => {
+            onClick={async () => {
               if (puedeSalir()) {
-                setProyecto(null);
-                setAdministracion(true);
+                try {
+                  await finalizador.current?.();
+                  finalizador.current = null;
+                  setProyecto(null);
+                  setAdministracion(true);
+                } catch (e) {
+                  setError((e as Error).message);
+                }
               }
             }}
           >
@@ -121,6 +139,7 @@ export function App() {
             proyecto={proyecto}
             volver={volver}
             registrarSalida={registrarSalida}
+            registrarFinalizador={registrarFinalizador}
           />
         ) : (
           <ProyectosPage

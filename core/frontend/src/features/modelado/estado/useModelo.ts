@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   aplicarCambio,
   leerModelo,
@@ -6,7 +6,15 @@ import {
   type Accion,
   type Cambio,
 } from '../api/modeladoApi';
+import {
+  abrirCanal,
+  abrirSesion,
+  cerrarSesion,
+  type EventoColaborativo,
+  type SesionColaborativa,
+} from '../../colaboracion/api/colaboracionApi';
 import { ApiError } from '../../../shared/api';
+
 export function useModelo(id: string) {
   const [modelo, setModelo] = useState<Modelo | null>(null),
     [error, setError] = useState('');
@@ -15,26 +23,192 @@ export function useModelo(id: string) {
   const [conflicto, setConflicto] = useState(false),
     [mensaje, setMensaje] = useState('');
   const [desactualizado, setDesactualizado] = useState(false);
-  const ocupado = useRef(false);
+  const [sesion, setSesion] = useState<SesionColaborativa | null>(null);
+  const [colaboracion, setColaboracion] = useState<'CONECTANDO' | 'CONECTADO' | 'LIMITADO'>(
+    'CONECTANDO',
+  );
+  const ocupado = useRef(false),
+    socket = useRef<WebSocket | null>(null),
+    sesionRef = useRef<SesionColaborativa | null>(null),
+    modeloRef = useRef<Modelo | null>(null),
+    pendienteRef = useRef<Cambio | null>(null),
+    enviandoRef = useRef(false),
+    borradorRef = useRef(false),
+    ultimoConfirmadoLocal = useRef<string | null>(null),
+    cargaRemota = useRef(false),
+    solicitudRef = useRef(crypto.randomUUID()),
+    salirRef = useRef<() => Promise<void>>(async () => {}),
+    enfocarRef = useRef<(tipo: string | null, entidad: string | null) => void>(() => {});
+
   useEffect(() => {
-    let vivo = true;
-    leerModelo(id)
-      .then((m) => {
-        if (vivo) setModelo(m);
-      })
-      .catch((e) => {
-        if (vivo) setError(e.message);
-      });
+    modeloRef.current = modelo;
+  }, [modelo]);
+  useEffect(() => {
+    pendienteRef.current = pendiente;
+  }, [pendiente]);
+  useEffect(() => {
+    enviandoRef.current = enviando;
+  }, [enviando]);
+  useEffect(() => {
+    sesionRef.current = sesion;
+  }, [sesion]);
+  const registrarBorrador = useCallback((activo: boolean) => {
+    borradorRef.current = activo;
+  }, []);
+
+  useEffect(() => {
+    let vivo = true,
+      reintentos = 0,
+      temporizador: number | undefined,
+      pulso: number | undefined;
+    const solicitud = solicitudRef.current;
+
+    async function cambioRemoto(revision: number) {
+      if (revision <= (modeloRef.current?.revision ?? -1)) return;
+      if (
+        borradorRef.current ||
+        pendienteRef.current ||
+        enviandoRef.current ||
+        cargaRemota.current
+      ) {
+        setDesactualizado(true);
+        setConflicto(true);
+        setError(
+          'El modelo cambió mientras editabas. Tu borrador se conserva para que lo revises.',
+        );
+        setMensaje('Hay una revisión remota. Conservamos tu cambio local para que lo revises.');
+        return;
+      }
+      cargaRemota.current = true;
+      try {
+        const actual = await leerModelo(id);
+        if (!vivo) return;
+        modeloRef.current = actual;
+        setModelo(actual);
+        setDesactualizado(false);
+        setMensaje('Modelo sincronizado · revisión ' + actual.revision);
+      } catch {
+        if (vivo) {
+          setDesactualizado(true);
+          setError('Hay un cambio confirmado. Recarga para recuperar la revisión reciente.');
+        }
+      } finally {
+        cargaRemota.current = false;
+      }
+    }
+
+    function conectarCanal(actual: SesionColaborativa) {
+      if (!vivo) return;
+      setColaboracion('CONECTANDO');
+      const canal = abrirCanal(id, actual.id);
+      socket.current = canal;
+      canal.onmessage = (e) => {
+        const evento = JSON.parse(e.data) as EventoColaborativo;
+        if (evento.tipo === 'CONECTADO') {
+          reintentos = 0;
+          setColaboracion('CONECTADO');
+          setError('');
+          window.clearInterval(pulso);
+          pulso = window.setInterval(() => {
+            if (canal.readyState === WebSocket.OPEN) canal.send(JSON.stringify({ tipo: 'PING' }));
+          }, 30000);
+        } else if (evento.tipo === 'PRESENCIA' && typeof evento.datos.sesion === 'object') {
+          const recibida = evento.datos.sesion;
+          sesionRef.current = recibida;
+          setSesion(recibida);
+        } else if (evento.tipo === 'MODELO_CONFIRMADO' && evento.datos.revision !== undefined) {
+          if (
+            evento.datos.cambio &&
+            (pendienteRef.current?.idCambioCliente === evento.datos.cambio ||
+              ultimoConfirmadoLocal.current === evento.datos.cambio)
+          ) {
+            if (ultimoConfirmadoLocal.current === evento.datos.cambio)
+              ultimoConfirmadoLocal.current = null;
+            return;
+          }
+          void cambioRemoto(evento.datos.revision);
+        } else if (evento.tipo === 'ERROR') {
+          setError(evento.datos.mensaje ?? 'El canal colaborativo rechazó la operación.');
+        }
+      };
+      canal.onclose = () => {
+        window.clearInterval(pulso);
+        if (!vivo) return;
+        setColaboracion('LIMITADO');
+        setError(
+          'Colaboración interrumpida. El modelo queda sin nuevas ediciones mientras reconectamos.',
+        );
+        if (reintentos < 5) {
+          reintentos += 1;
+          temporizador = window.setTimeout(
+            () => conectarCanal(sesionRef.current ?? actual),
+            Math.min(1000 * 2 ** (reintentos - 1), 10000),
+          );
+        }
+      };
+      canal.onerror = () => canal.close();
+      enfocarRef.current = (tipo, entidad) => {
+        if (canal.readyState === WebSocket.OPEN)
+          canal.send(JSON.stringify({ tipo: 'FOCO', tipoEntidad: tipo, idEntidad: entidad }));
+      };
+    }
+
+    async function iniciar() {
+      try {
+        const abierta = await abrirSesion(id, solicitud);
+        if (!vivo) return;
+        sesionRef.current = abierta;
+        setSesion(abierta);
+        const actual = await leerModelo(id);
+        if (!vivo) return;
+        modeloRef.current = actual;
+        setModelo(actual);
+        conectarCanal(abierta);
+      } catch (e) {
+        if (vivo) {
+          setColaboracion('LIMITADO');
+          setError((e as Error).message);
+        }
+      }
+    }
+
+    salirRef.current = async () => {
+      const actual = sesionRef.current;
+      if (!actual || actual.estado !== 'ACTIVO') return;
+      try {
+        await cerrarSesion(id, actual.id);
+      } catch (e) {
+        if (!(e instanceof ApiError) || ![401, 403, 404, 409].includes(e.status)) throw e;
+      } finally {
+        vivo = false;
+        window.clearTimeout(temporizador);
+        window.clearInterval(pulso);
+        socket.current?.close(1000, 'Salida explícita');
+        socket.current = null;
+        sesionRef.current = null;
+      }
+    };
+    void iniciar();
     return () => {
       vivo = false;
+      window.clearTimeout(temporizador);
+      window.clearInterval(pulso);
+      socket.current?.close(1000, 'Vista cerrada');
+      socket.current = null;
     };
   }, [id]);
+
   async function recargar() {
-    if (ocupado.current) return false;
+    // Una recarga explícita es la vía de recuperación del conflicto. En ese estado
+    // puede liberar un bloqueo defensivo dejado por la solicitud que ya terminó.
+    if (ocupado.current && !conflicto) return false;
     ocupado.current = true;
+    enviandoRef.current = true;
     setEnviando(true);
     try {
-      setModelo(await leerModelo(id));
+      const actual = await leerModelo(id);
+      modeloRef.current = actual;
+      setModelo(actual);
       setError('');
       setConflicto(false);
       setPendiente(null);
@@ -46,11 +220,13 @@ export function useModelo(id: string) {
       return false;
     } finally {
       ocupado.current = false;
+      enviandoRef.current = false;
       setEnviando(false);
     }
   }
+
   async function enviar(cambio: Cambio) {
-    if (ocupado.current) return false;
+    if (ocupado.current || colaboracion !== 'CONECTADO') return false;
     ocupado.current = true;
     setEnviando(true);
     setError('');
@@ -58,11 +234,15 @@ export function useModelo(id: string) {
     setPendiente(cambio);
     try {
       const c = await aplicarCambio(id, cambio);
+      ultimoConfirmadoLocal.current = c.idCambioCliente;
+      pendienteRef.current = null;
       setPendiente(null);
       setConflicto(false);
       setMensaje('Guardado · revisión ' + c.revision);
       try {
-        setModelo(await leerModelo(id));
+        const actual = await leerModelo(id);
+        modeloRef.current = actual;
+        setModelo(actual);
         setDesactualizado(false);
       } catch {
         setDesactualizado(true);
@@ -72,23 +252,40 @@ export function useModelo(id: string) {
     } catch (e) {
       setError((e as Error).message);
       setConflicto(e instanceof ApiError && e.status === 409);
-      // Un rechazo conocido permite corregir; una respuesta perdida conserva el UUID.
-      if (e instanceof ApiError && [400, 401, 403, 404, 413, 422].includes(e.status))
+      // Un rechazo conocido permite corregir; una respuesta perdida conserva ambos UUID.
+      if (e instanceof ApiError && [400, 401, 403, 404, 413, 422].includes(e.status)) {
+        pendienteRef.current = null;
         setPendiente(null);
+      }
       return false;
     } finally {
       ocupado.current = false;
+      enviandoRef.current = false;
       setEnviando(false);
     }
   }
+
   async function cambiar(accion: Accion) {
-    if (!modelo || ocupado.current || pendiente || conflicto || desactualizado) return false;
+    const sesionActual = sesionRef.current;
+    if (
+      !modelo ||
+      !sesionActual ||
+      sesionActual.modoPropio !== 'EDITOR' ||
+      colaboracion !== 'CONECTADO' ||
+      ocupado.current ||
+      pendiente ||
+      conflicto ||
+      desactualizado
+    )
+      return false;
     return enviar({
+      idSesionEdicion: sesionActual.id,
       idCambioCliente: crypto.randomUUID(),
       revisionBase: modelo.revision,
       acciones: [accion],
     });
   }
+
   return {
     modelo,
     error,
@@ -97,8 +294,13 @@ export function useModelo(id: string) {
     pendiente,
     conflicto,
     desactualizado,
+    sesion,
+    colaboracion,
     recargar,
     cambiar,
     reintentar: () => pendiente && enviar(pendiente),
+    salir: () => salirRef.current(),
+    enfocar: (tipo: string | null, entidad: string | null) => enfocarRef.current(tipo, entidad),
+    registrarBorrador,
   };
 }

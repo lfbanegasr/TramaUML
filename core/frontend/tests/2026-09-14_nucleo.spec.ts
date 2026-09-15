@@ -21,10 +21,18 @@ async function proyecto(page: Page) {
   const respuesta = page.waitForResponse(
     (r) => r.url().endsWith('/api/proyectos') && r.request().method() === 'POST',
   );
+  const apertura = page.waitForResponse(
+    (r) => r.url().endsWith('/sesiones') && r.request().method() === 'POST',
+  );
   await page.getByRole('button', { name: 'Crear proyecto', exact: true }).click();
   const p = await (await respuesta).json();
+  const sesion = await (await apertura).json();
   await expect(page.getByRole('button', { name: /Nueva clase/ })).toBeVisible();
-  return p as { idModelo: string; nombre: string };
+  return { ...p, idSesionEdicion: sesion.id } as {
+    idModelo: string;
+    nombre: string;
+    idSesionEdicion: string;
+  };
 }
 async function crearClase(page: Page, nombre: string) {
   await page.getByRole('button', { name: /Nueva clase/ }).click();
@@ -166,6 +174,7 @@ test('conflicto conserva el borrador y salir exige decisión del usuario', async
   const externa = await page.request.post('/api/modelos/' + p.idModelo + '/cambios', {
     headers: { [csrf.header]: csrf.token },
     data: {
+      idSesionEdicion: p.idSesionEdicion,
       idCambioCliente: crypto.randomUUID(),
       revisionBase: 1,
       acciones: [
@@ -179,12 +188,16 @@ test('conflicto conserva el borrador y salir exige decisión del usuario', async
     },
   });
   expect(externa.status()).toBe(200);
-  await page.getByRole('button', { name: 'Guardar elemento', exact: true }).click();
   await expect(
     page.getByRole('alert').filter({ hasText: 'Tu borrador se conserva' }),
   ).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Guardar elemento', exact: true })).toBeDisabled();
   await expect(page.getByLabel('Nombre', { exact: true })).toHaveValue('Local');
+  const recarga = page.waitForResponse(
+    (r) => r.url().endsWith('/api/modelos/' + p.idModelo) && r.request().method() === 'GET',
+  );
   await page.getByRole('button', { name: /Recargar modelo/ }).click();
+  expect((await recarga).status()).toBe(200);
   await expect(page.getByRole('button', { name: 'Guardar elemento', exact: true })).toBeEnabled();
   await page.getByLabel('Nombre', { exact: true }).fill('LocalRevisada');
   await page.getByRole('button', { name: 'Guardar elemento', exact: true }).click();

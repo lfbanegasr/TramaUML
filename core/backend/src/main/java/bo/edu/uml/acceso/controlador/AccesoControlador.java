@@ -86,7 +86,8 @@ public class AccesoControlador {
                 .httpOnly(true)
                 .secure(secure)
                 .sameSite("Strict")
-                .path("/api")
+                // El mismo token opaco autentica el upgrade de /ws; sigue oculto y SameSite.
+                .path("/")
                 .maxAge(duration)
                 .build();
     }

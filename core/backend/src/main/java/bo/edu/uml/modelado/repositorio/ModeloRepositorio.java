@@ -81,6 +81,7 @@ public class ModeloRepositorio {
 
     public void registrar(
             UUID modelo,
+            UUID sesion,
             UUID cliente,
             UUID actor,
             long base,
@@ -91,12 +92,13 @@ public class ModeloRepositorio {
             String parche) {
         jdbc.update(
                 """
-                insert into uml_colaborativo.cambio_modelo(id_modelo,id_cambio_cliente,id_usuario_actor,revision_base,
+                insert into uml_colaborativo.cambio_modelo(id_modelo,id_sesion_edicion,id_cambio_cliente,id_usuario_actor,revision_base,
                 revision_aplicada,tipo_operacion,tipo_entidad,id_entidad,parche,estado,aplicado_en)
-                values(:modelo,:cliente,:actor,:base,:revision,:tipo,:entidad,:id,cast(:parche as jsonb),'APLICADO',clock_timestamp())
+                values(:modelo,:sesion,:cliente,:actor,:base,:revision,:tipo,:entidad,:id,cast(:parche as jsonb),'APLICADO',clock_timestamp())
                 """,
                 new MapSqlParameterSource()
                         .addValue("modelo", modelo)
+                        .addValue("sesion", sesion)
                         .addValue("cliente", cliente)
                         .addValue("actor", actor)
                         .addValue("base", base)
@@ -108,11 +110,11 @@ public class ModeloRepositorio {
     }
 
     public Optional<Confirmacion> repeticion(
-            UUID modelo, UUID cliente, UUID actor, long base, String parche) {
+            UUID modelo, UUID sesion, UUID cliente, UUID actor, long base, String parche) {
         var rows =
                 jdbc.query(
                         """
-                        select c.id_usuario_actor,c.revision_base,c.revision_aplicada,
+                        select c.id_sesion_edicion,c.id_usuario_actor,c.revision_base,c.revision_aplicada,
                         c.parche=cast(:parche as jsonb) igual,v.id id_version
                         from uml_colaborativo.cambio_modelo c join uml_colaborativo.version_modelo_uml v
                           on v.id_modelo=c.id_modelo and v.revision=c.revision_aplicada
@@ -120,7 +122,9 @@ public class ModeloRepositorio {
                         """,
                         Map.of("modelo", modelo, "cliente", cliente, "parche", parche),
                         (r, n) -> {
-                            if (!actor.equals(r.getObject("id_usuario_actor", UUID.class))
+                            if (!Objects.equals(
+                                            sesion, r.getObject("id_sesion_edicion", UUID.class))
+                                    || !actor.equals(r.getObject("id_usuario_actor", UUID.class))
                                     || base != r.getLong("revision_base")
                                     || !r.getBoolean("igual"))
                                 throw new ApiException(

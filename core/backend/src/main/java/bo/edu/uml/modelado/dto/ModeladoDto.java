@@ -11,6 +11,7 @@ public final class ModeladoDto {
     private ModeladoDto() {}
 
     public record Cambio(
+            @NotNull UUID idSesionEdicion,
             @NotNull UUID idCambioCliente,
             @Min(0) long revisionBase,
             @NotEmpty @Size(max = 50) List<@Valid Accion> acciones) {}

@@ -87,7 +87,12 @@ export type Accion = {
   idEntidad: string;
   datos?: Record<string, unknown>;
 };
-export type Cambio = { idCambioCliente: string; revisionBase: number; acciones: Accion[] };
+export type Cambio = {
+  idSesionEdicion: string;
+  idCambioCliente: string;
+  revisionBase: number;
+  acciones: Accion[];
+};
 export type Confirmacion = {
   idCambioCliente: string;
   revision: number;

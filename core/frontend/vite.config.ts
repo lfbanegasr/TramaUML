@@ -6,7 +6,13 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
-    proxy: { '/api': process.env.UML_API_PROXY_TARGET ?? 'http://127.0.0.1:8080' },
+    proxy: {
+      '/api': process.env.UML_API_PROXY_TARGET ?? 'http://127.0.0.1:8080',
+      '/ws': {
+        target: process.env.UML_API_PROXY_TARGET ?? 'http://127.0.0.1:8080',
+        ws: true,
+      },
+    },
   },
   preview: { port: 4173, strictPort: true },
 });

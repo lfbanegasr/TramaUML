@@ -2,11 +2,13 @@ package bo.edu.uml.proyectos.servicio;
 
 import bo.edu.uml.acceso.modelo.Identidad;
 import bo.edu.uml.acceso.repositorio.*;
+import bo.edu.uml.colaboracion.servicio.ColaboracionServicio.AccesoProyectoCambiado;
 import bo.edu.uml.compartido.ApiException;
 import bo.edu.uml.modelado.repositorio.ModeloRepositorio;
 import bo.edu.uml.proyectos.dto.MiembroDto.*;
 import bo.edu.uml.proyectos.repositorio.MiembroRepositorio;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -18,16 +20,19 @@ public class MiembroServicio {
     private final ModeloRepositorio modelos;
     private final AdministracionRepositorio admin;
     private final AccesoRepositorio acceso;
+    private final ApplicationEventPublisher eventos;
 
     public MiembroServicio(
             MiembroRepositorio repo,
             ModeloRepositorio modelos,
             AdministracionRepositorio admin,
-            AccesoRepositorio acceso) {
+            AccesoRepositorio acceso,
+            ApplicationEventPublisher eventos) {
         this.repo = repo;
         this.modelos = modelos;
         this.admin = admin;
         this.acceso = acceso;
+        this.eventos = eventos;
     }
 
     private UUID autorizar(Identidad a, UUID proyecto, boolean bloquear) {
@@ -116,6 +121,7 @@ public class MiembroServicio {
                 throw new ApiException(403, "No puedes conceder ese permiso.");
         }
         repo.guardar(proyecto, id, a.id(), d, nuevo);
+        eventos.publishEvent(new AccesoProyectoCambiado(proyecto));
         return repo.obtener(proyecto, id);
     }
 
@@ -129,6 +135,7 @@ public class MiembroServicio {
                     "Solo el propietario actual o un superadministrador puede transferir la"
                             + " propiedad.");
         repo.transferir(proyecto, miembro, a.id());
+        eventos.publishEvent(new AccesoProyectoCambiado(proyecto));
         return listar(a, proyecto);
     }
 }

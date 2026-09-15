@@ -176,6 +176,7 @@ public class ProyectoServicio {
         long revision = modelos.iniciar(modelo, 0, actor.id());
         modelos.registrar(
                 modelo,
+                null,
                 UUID.randomUUID(),
                 actor.id(),
                 0,

@@ -17,7 +17,16 @@ if ((Get-FileHash -LiteralPath $jar -Algorithm SHA256).Hash -ne $hashEsperado) {
 $java = if ($JavaHome) { Join-Path $JavaHome 'bin\java.exe' } else { '' }
 if (-not $java -or -not (Test-Path -LiteralPath $java)) {
     $candidato = Get-Command java.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-    $java = if ($candidato) { $candidato.Source } else { 'C:\Program Files\Android\Android Studio\jbr\bin\java.exe' }
+    $java = if ($candidato) { $candidato.Source } else { '' }
+    if (-not $java) {
+        foreach ($ubicacionJava in @(
+            'C:\Program Files\Android\Android Studio\jbr\bin\java.exe',
+            'D:\Android Studio Instalacion 2025\jbr\bin\java.exe',
+            'D:\Program Files\Android\Android Studio\jbr\bin\java.exe'
+        )) {
+            if (Test-Path -LiteralPath $ubicacionJava -PathType Leaf) { $java = $ubicacionJava; break }
+        }
+    }
 }
 if (-not (Test-Path -LiteralPath $java)) { throw 'Indica un JDK 21 con -JavaHome.' }
 Push-Location $raiz

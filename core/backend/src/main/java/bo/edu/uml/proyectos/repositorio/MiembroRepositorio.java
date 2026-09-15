@@ -126,7 +126,7 @@ public class MiembroRepositorio {
                         p.addValue("permiso", decision.permiso())
                                 .addValue("decision", decision.decision()));
         }
-        cerrarAcceso(proyecto, d.usuario());
+        sincronizarAcceso(proyecto, d.usuario());
         jdbc.update(
                 "insert into"
                     + " uml_colaborativo.actividad_proyecto(id_proyecto,id_usuario_actor,categoria,accion,tipo_entidad,id_entidad)"
@@ -134,19 +134,44 @@ public class MiembroRepositorio {
                 p.addValue("accion", nuevo ? "INCORPORAR" : "ACTUALIZAR_" + d.estado()));
     }
 
-    public void cerrarAcceso(UUID proyecto, UUID usuario) {
+    public void sincronizarAcceso(UUID proyecto, UUID usuario) {
         var p = Map.of("proyecto", proyecto, "usuario", usuario);
         jdbc.update(
                 """
-                update uml_colaborativo.participante_sesion_modelo ps set estado_presencia='DESCONECTADO',salida_en=clock_timestamp()
-                from uml_colaborativo.sesion_edicion_modelo s,uml_colaborativo.modelo_uml mo
-                where ps.id_usuario=:usuario and ps.salida_en is null and ps.id_sesion_edicion=s.id and s.id_modelo=mo.id and mo.id_proyecto=:proyecto
+                update uml_colaborativo.participante_sesion_modelo ps set
+                  modo_participante=case when uml_colaborativo.tiene_permiso_proyecto(:usuario,:proyecto,'EDITAR_MODELO')
+                    and pr.estado='ACTIVO' and mo.estado<>'ARCHIVADO' then 'EDITOR' else 'LECTOR' end,
+                  estado_presencia=case when uml_colaborativo.tiene_permiso_proyecto(:usuario,:proyecto,'VER_MODELO')
+                    then ps.estado_presencia else 'DESCONECTADO' end,
+                  salida_en=case when uml_colaborativo.tiene_permiso_proyecto(:usuario,:proyecto,'VER_MODELO')
+                    then ps.salida_en else clock_timestamp() end,
+                  tipo_entidad_enfocada=case when uml_colaborativo.tiene_permiso_proyecto(:usuario,:proyecto,'VER_MODELO')
+                    then ps.tipo_entidad_enfocada else null end,
+                  id_entidad_enfocada=case when uml_colaborativo.tiene_permiso_proyecto(:usuario,:proyecto,'VER_MODELO')
+                    then ps.id_entidad_enfocada else null end,
+                  ultima_presencia_en=clock_timestamp()
+                from uml_colaborativo.sesion_edicion_modelo s,uml_colaborativo.modelo_uml mo,
+                  uml_colaborativo.proyecto pr
+                where ps.id_usuario=:usuario and ps.salida_en is null and ps.id_sesion_edicion=s.id
+                  and s.id_modelo=mo.id and mo.id_proyecto=:proyecto and pr.id=mo.id_proyecto
                 """,
                 p);
         jdbc.update(
                 """
-                update uml_colaborativo.sesion_edicion_modelo s set estado='INTERRUMPIDO',cerrado_en=clock_timestamp()
-                from uml_colaborativo.modelo_uml mo where s.abierto_por=:usuario and s.estado='ACTIVO' and s.id_modelo=mo.id and mo.id_proyecto=:proyecto
+                update uml_colaborativo.sesion_edicion_modelo s set
+                  estado=case when exists(select 1 from uml_colaborativo.participante_sesion_modelo ps
+                    where ps.id_sesion_edicion=s.id and ps.salida_en is null
+                      and ps.estado_presencia in ('EN_LINEA','AUSENTE')) then 'ACTIVO' else 'CERRADO' end,
+                  modo=case when exists(select 1 from uml_colaborativo.participante_sesion_modelo ps
+                    where ps.id_sesion_edicion=s.id and ps.salida_en is null
+                      and ps.modo_participante='EDITOR' and ps.estado_presencia in ('EN_LINEA','AUSENTE'))
+                    then 'EDICION' else 'SOLO_LECTURA' end,
+                  cerrado_en=case when exists(select 1 from uml_colaborativo.participante_sesion_modelo ps
+                    where ps.id_sesion_edicion=s.id and ps.salida_en is null
+                      and ps.estado_presencia in ('EN_LINEA','AUSENTE')) then null else clock_timestamp() end,
+                  ultima_actividad_en=clock_timestamp()
+                from uml_colaborativo.modelo_uml mo where s.estado='ACTIVO' and s.id_modelo=mo.id
+                  and mo.id_proyecto=:proyecto
                 """,
                 p);
     }

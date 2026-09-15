@@ -43,8 +43,10 @@ class NucleoIntegracionTest {
     @Autowired PasswordEncoder encoder;
     @Autowired InicializarAdministrador inicializar;
     @Autowired AccesoRepositorio acceso;
+    @Autowired bo.edu.uml.colaboracion.servicio.ColaboracionServicio colaboracion;
     private String usuario, clave;
     private UUID admin;
+    private final Map<String, UUID> sesionesEdicion = new ConcurrentHashMap<>();
 
     private record Cliente(Cookie sesion, Cookie csrf, String token, String header) {}
 
@@ -141,10 +143,51 @@ class NucleoIntegracionTest {
     }
 
     private ResultActions enviar(Cliente c, String modelo, String cuerpo) throws Exception {
+        var cambio = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(cuerpo);
+        if (!cambio.hasNonNull("idSesionEdicion"))
+            cambio.put("idSesionEdicion", asegurarSesion(c, modelo).toString());
         return mvc.perform(
                 autorizado(post("/api/modelos/" + modelo + "/cambios"), c)
                         .contentType("application/json")
-                        .content(cuerpo));
+                        .content(json.writeValueAsString(cambio)));
+    }
+
+    private UUID asegurarSesion(Cliente c, String modelo) throws Exception {
+        String llave = c.sesion().getValue() + ":" + modelo;
+        synchronized (sesionesEdicion) {
+            var existente = sesionesEdicion.get(llave);
+            UUID solicitud = UUID.randomUUID();
+            var respuesta =
+                    escribir(
+                                    c,
+                                    post("/api/modelos/" + modelo + "/sesiones"),
+                                    Map.of("idSolicitudCliente", solicitud))
+                            .andReturn()
+                            .getResponse();
+            if (respuesta.getStatus() != 201)
+                return existente == null ? UUID.randomUUID() : existente;
+            UUID sesion =
+                    UUID.fromString(
+                            json.readTree(respuesta.getContentAsString()).get("id").asText());
+            jdbc.update(
+                    "update uml_colaborativo.participante_sesion_modelo set"
+                            + " estado_presencia='EN_LINEA' where id_sesion_edicion=? and"
+                            + " id_usuario=(select id_usuario from"
+                            + " uml_colaborativo.sesion_autenticacion where"
+                            + " hash_token=digest(?,'sha256'))",
+                    sesion,
+                    c.sesion().getValue());
+            jdbc.update(
+                    "update uml_colaborativo.sesion_edicion_modelo set modo='EDICION' where id=?"
+                            + " and exists(select 1 from"
+                            + " uml_colaborativo.participante_sesion_modelo where"
+                            + " id_sesion_edicion=? and modo_participante='EDITOR' and"
+                            + " estado_presencia='EN_LINEA')",
+                    sesion,
+                    sesion);
+            sesionesEdicion.put(llave, sesion);
+            return sesion;
+        }
     }
 
     private UUID fixture(String u) {
@@ -1588,7 +1631,14 @@ class NucleoIntegracionTest {
                                 .andExpect(status().isOk())
                                 .andExpect(jsonPath("$.estado").value("ACTIVO")));
         assertThat(reactivado.get("archivadoEn").isNull()).isTrue();
-        assertThat(actividad(id)).isEqualTo(antes + 2);
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from uml_colaborativo.actividad_proyecto where"
+                                        + " id_proyecto=? and categoria='PROYECTO' and accion in"
+                                        + " ('ARCHIVAR','REACTIVAR')",
+                                Long.class,
+                                UUID.fromString(id)))
+                .isEqualTo(2);
         enviar(a, modelo, cambio(1, UUID.randomUUID(), clase(UUID.randomUUID(), "Permitida")))
                 .andExpect(status().isOk());
     }
@@ -1930,5 +1980,270 @@ class NucleoIntegracionTest {
                                 Long.class,
                                 UUID.fromString(segundo)))
                 .isEqualTo(1);
+    }
+
+    @Test
+    void sesionReutilizadaExigeConexionYVinculaCambioIdempotente() throws Exception {
+        var c = login(usuario, clave);
+        var p = proyecto(c);
+        String modelo = p.get("idModelo").asText();
+        UUID solicitud = UUID.randomUUID();
+        var primera =
+                respuesta(
+                        escribir(
+                                        c,
+                                        post("/api/modelos/" + modelo + "/sesiones"),
+                                        Map.of("idSolicitudCliente", solicitud))
+                                .andExpect(status().isCreated())
+                                .andExpect(jsonPath("$.modo").value("SOLO_LECTURA"))
+                                .andExpect(jsonPath("$.modoPropio").value("EDITOR"))
+                                .andExpect(jsonPath("$.participantes[0].estado").value("AUSENTE")));
+        UUID sesion = UUID.fromString(primera.get("id").asText());
+        assertThat(sesion).isEqualTo(solicitud);
+        var repetida =
+                respuesta(
+                        escribir(
+                                        c,
+                                        post("/api/modelos/" + modelo + "/sesiones"),
+                                        Map.of("idSolicitudCliente", solicitud))
+                                .andExpect(status().isCreated()));
+        assertThat(repetida.get("id").asText()).isEqualTo(sesion.toString());
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from uml_colaborativo.actividad_proyecto where"
+                                        + " id_proyecto=? and categoria='COLABORACION' and"
+                                        + " accion='ABRIR_SESION'",
+                                Long.class,
+                                UUID.fromString(p.get("id").asText())))
+                .isEqualTo(1);
+
+        var identidad = acceso.identidad(admin);
+        var conectada = colaboracion.conectar(identidad, UUID.fromString(modelo), sesion);
+        assertThat(conectada.modo()).isEqualTo("EDICION");
+        assertThat(conectada.participantes().getFirst().estado()).isEqualTo("EN_LINEA");
+
+        UUID idCambio = UUID.randomUUID(), clase = UUID.randomUUID();
+        var cuerpo =
+                (com.fasterxml.jackson.databind.node.ObjectNode)
+                        json.readTree(cambio(1, idCambio, clase(clase, "Colaborativa")));
+        cuerpo.put("idSesionEdicion", sesion.toString());
+        mvc.perform(
+                        autorizado(post("/api/modelos/" + modelo + "/cambios"), c)
+                                .contentType("application/json")
+                                .content(json.writeValueAsString(cuerpo)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.repetido").value(false));
+        assertThat(
+                        jdbc.queryForObject(
+                                "select id_sesion_edicion from uml_colaborativo.cambio_modelo where"
+                                        + " id_modelo=? and id_cambio_cliente=?",
+                                UUID.class,
+                                UUID.fromString(modelo),
+                                idCambio))
+                .isEqualTo(sesion);
+
+        escribir(c, delete("/api/modelos/" + modelo + "/sesiones/" + sesion), Map.of())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.estado").value("CERRADO"));
+        mvc.perform(
+                        autorizado(post("/api/modelos/" + modelo + "/cambios"), c)
+                                .contentType("application/json")
+                                .content(json.writeValueAsString(cuerpo)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.repetido").value(true));
+        cuerpo.put("idCambioCliente", UUID.randomUUID().toString());
+        cuerpo.put("revisionBase", 2);
+        mvc.perform(
+                        autorizado(post("/api/modelos/" + modelo + "/cambios"), c)
+                                .contentType("application/json")
+                                .content(json.writeValueAsString(cuerpo)))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void aperturaConcurrenteProduceUnaSalaYUnParticipante() throws Exception {
+        var c = login(usuario, clave);
+        var p = proyecto(c);
+        String modelo = p.get("idModelo").asText();
+        var inicio = new CountDownLatch(1);
+        var pool = Executors.newFixedThreadPool(2);
+        try {
+            var tareas = new ArrayList<Future<String>>();
+            for (int i = 0; i < 2; i++)
+                tareas.add(
+                        pool.submit(
+                                () -> {
+                                    inicio.await();
+                                    return respuesta(
+                                                    escribir(
+                                                                    c,
+                                                                    post(
+                                                                            "/api/modelos/"
+                                                                                    + modelo
+                                                                                    + "/sesiones"),
+                                                                    Map.of(
+                                                                            "idSolicitudCliente",
+                                                                            UUID.randomUUID()))
+                                                            .andExpect(status().isCreated()))
+                                            .get("id")
+                                            .asText();
+                                }));
+            inicio.countDown();
+            assertThat(
+                            new HashSet<>(
+                                    List.of(
+                                            tareas.get(0).get(10, TimeUnit.SECONDS),
+                                            tareas.get(1).get(10, TimeUnit.SECONDS))))
+                    .hasSize(1);
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from uml_colaborativo.sesion_edicion_modelo where"
+                                        + " id_modelo=? and estado='ACTIVO'",
+                                Long.class,
+                                UUID.fromString(modelo)))
+                .isEqualTo(1);
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from"
+                                        + " uml_colaborativo.participante_sesion_modelo ps join"
+                                        + " uml_colaborativo.sesion_edicion_modelo s on"
+                                        + " s.id=ps.id_sesion_edicion where s.id_modelo=?",
+                                Long.class,
+                                UUID.fromString(modelo)))
+                .isEqualTo(1);
+    }
+
+    @Test
+    void lectorParticipaSinPoderEditarYFocoAjenoRevierte() throws Exception {
+        var a = login(usuario, clave);
+        var p = proyecto(a);
+        UUID proyecto = UUID.fromString(p.get("id").asText());
+        UUID modelo = UUID.fromString(p.get("idModelo").asText());
+        String nombre = "lector_sesion_" + UUID.randomUUID().toString().substring(0, 8);
+        UUID cuenta = fixture(nombre);
+        miembroFixture(proyecto, cuenta, "LECTOR_PROYECTO");
+        var lector = login(nombre, clave);
+        var abierta =
+                respuesta(
+                        escribir(
+                                        lector,
+                                        post("/api/modelos/" + modelo + "/sesiones"),
+                                        Map.of("idSolicitudCliente", UUID.randomUUID()))
+                                .andExpect(status().isCreated())
+                                .andExpect(jsonPath("$.modoPropio").value("LECTOR")));
+        UUID sesion = UUID.fromString(abierta.get("id").asText());
+        var conectada = colaboracion.conectar(acceso.identidad(cuenta), modelo, sesion);
+        assertThat(conectada.modo()).isEqualTo("SOLO_LECTURA");
+        var cuerpo =
+                (com.fasterxml.jackson.databind.node.ObjectNode)
+                        json.readTree(
+                                cambio(
+                                        1,
+                                        UUID.randomUUID(),
+                                        clase(UUID.randomUUID(), "No permitida")));
+        cuerpo.put("idSesionEdicion", sesion.toString());
+        mvc.perform(
+                        autorizado(post("/api/modelos/" + modelo + "/cambios"), lector)
+                                .contentType("application/json")
+                                .content(json.writeValueAsString(cuerpo)))
+                .andExpect(status().isNotFound());
+        assertThatThrownBy(
+                        () ->
+                                colaboracion.enfocar(
+                                        acceso.identidad(cuenta),
+                                        modelo,
+                                        sesion,
+                                        new bo.edu.uml.colaboracion.dto.ColaboracionDto.Foco(
+                                                "CLASE", UUID.randomUUID())))
+                .isInstanceOf(ApiException.class);
+        assertThat(
+                        jdbc.queryForObject(
+                                "select id_entidad_enfocada is null from"
+                                        + " uml_colaborativo.participante_sesion_modelo where"
+                                        + " id_sesion_edicion=? and id_usuario=?",
+                                Boolean.class,
+                                sesion,
+                                cuenta))
+                .isTrue();
+    }
+
+    @Test
+    void perdidaDeEdicionDegradaParticipanteSinExpulsarAlLector() throws Exception {
+        var a = login(usuario, clave);
+        var p = proyecto(a);
+        UUID proyecto = UUID.fromString(p.get("id").asText());
+        UUID modelo = UUID.fromString(p.get("idModelo").asText());
+        String nombre = "editor_sesion_" + UUID.randomUUID().toString().substring(0, 8);
+        UUID cuenta = fixture(nombre);
+        var incorporado =
+                respuesta(
+                        escribir(
+                                        a,
+                                        post("/api/proyectos/" + proyecto + "/miembros"),
+                                        datosMiembro(
+                                                cuenta,
+                                                rol("EDITOR_PROYECTO"),
+                                                "ACTIVO",
+                                                null,
+                                                List.of()))
+                                .andExpect(status().isCreated()));
+        var cliente = login(nombre, clave);
+        var abierta =
+                respuesta(
+                        escribir(
+                                        cliente,
+                                        post("/api/modelos/" + modelo + "/sesiones"),
+                                        Map.of("idSolicitudCliente", UUID.randomUUID()))
+                                .andExpect(status().isCreated()));
+        UUID sesion = UUID.fromString(abierta.get("id").asText());
+        colaboracion.conectar(acceso.identidad(cuenta), modelo, sesion);
+        escribir(
+                        a,
+                        put(
+                                "/api/proyectos/"
+                                        + proyecto
+                                        + "/miembros/"
+                                        + incorporado.get("id").asText()),
+                        datosMiembro(
+                                cuenta,
+                                rol("LECTOR_PROYECTO"),
+                                "ACTIVO",
+                                incorporado.get("revision").asText(),
+                                List.of()))
+                .andExpect(status().isOk());
+        var estado =
+                respuesta(
+                        mvc.perform(
+                                        get("/api/modelos/" + modelo + "/sesiones/" + sesion)
+                                                .cookie(cliente.sesion()))
+                                .andExpect(status().isOk()));
+        assertThat(estado.get("modo").asText()).isEqualTo("SOLO_LECTURA");
+        assertThat(estado.get("modoPropio").asText()).isEqualTo("LECTOR");
+        assertThat(estado.get("participantes").get(0).get("estado").asText()).isEqualTo("EN_LINEA");
+    }
+
+    @Test
+    void sesionRealBloqueaArchivoHastaSalidaExplicita() throws Exception {
+        var a = login(usuario, clave);
+        var p = proyecto(a);
+        UUID modelo = UUID.fromString(p.get("idModelo").asText());
+        var abierta =
+                respuesta(
+                        escribir(
+                                        a,
+                                        post("/api/modelos/" + modelo + "/sesiones"),
+                                        Map.of("idSolicitudCliente", UUID.randomUUID()))
+                                .andExpect(status().isCreated()));
+        UUID sesion = UUID.fromString(abierta.get("id").asText());
+        colaboracion.conectar(acceso.identidad(admin), modelo, sesion);
+        escribir(a, post("/api/proyectos/" + p.get("id").asText() + "/archivar"), transicion(p))
+                .andExpect(status().isConflict());
+        escribir(a, delete("/api/modelos/" + modelo + "/sesiones/" + sesion), Map.of())
+                .andExpect(status().isOk());
+        escribir(a, post("/api/proyectos/" + p.get("id").asText() + "/archivar"), transicion(p))
+                .andExpect(status().isOk());
     }
 }

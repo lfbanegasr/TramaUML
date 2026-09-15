@@ -8,7 +8,7 @@
     [string]$Nombre
 )
 $ErrorActionPreference='Stop'
-$jar=Join-Path ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))) 'backend\target\plataforma-0.3.0-SNAPSHOT.jar'
+$jar=Join-Path ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))) 'backend\target\plataforma-0.4.0-SNAPSHOT.jar'
 if(-not (Test-Path -LiteralPath $jar)) {throw 'Primero compila y empaqueta core/backend.'}
 $java=$null
 if($JavaHome) {
@@ -20,7 +20,15 @@ if($JavaHome) {
 if(-not $java) {
     $javaEnPath=Get-Command java.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if($javaEnPath) {$java=$javaEnPath.Source}
-    elseif(Test-Path -LiteralPath 'C:\Program Files\Android\Android Studio\jbr\bin\java.exe' -PathType Leaf) {$java='C:\Program Files\Android\Android Studio\jbr\bin\java.exe'}
+    else {
+        foreach($ubicacionJava in @(
+            'C:\Program Files\Android\Android Studio\jbr\bin\java.exe',
+            'D:\Android Studio Instalacion 2025\jbr\bin\java.exe',
+            'D:\Program Files\Android\Android Studio\jbr\bin\java.exe'
+        )) {
+            if(Test-Path -LiteralPath $ubicacionJava -PathType Leaf) {$java=$ubicacionJava;break}
+        }
+    }
 }
 if(-not $java) {throw 'No se encontró Java 21. Usa -JavaHome con la carpeta de un JDK 21 instalado.'}
 $versionJava=@(& $java --version)
