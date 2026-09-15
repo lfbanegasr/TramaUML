@@ -8,7 +8,7 @@
     [string]$Nombre
 )
 $ErrorActionPreference='Stop'
-$jar=Join-Path ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))) 'backend\target\plataforma-0.2.0-SNAPSHOT.jar'
+$jar=Join-Path ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))) 'backend\target\plataforma-0.3.0-SNAPSHOT.jar'
 if(-not (Test-Path -LiteralPath $jar)) {throw 'Primero compila y empaqueta core/backend.'}
 $java=$null
 if($JavaHome) {

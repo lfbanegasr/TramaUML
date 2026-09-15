@@ -1,15 +1,22 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSesion } from '../features/acceso/estado/SesionProvider';
 import { AccesoPage } from '../features/acceso/pages/AccesoPage';
 import { ProyectosPage } from '../features/proyectos/pages/ProyectosPage';
 import { EditorPage } from '../features/modelado/pages/EditorPage';
 import type { Proyecto } from '../features/proyectos/api/proyectosApi';
+import { consultaInicial, type ConsultaProyectos } from '../features/proyectos/api/proyectosApi';
 import { AdministracionPage } from '../features/administracion/pages/AdministracionPage';
 export function App() {
   const { sesion, cargando, salir } = useSesion();
   const [proyecto, setProyecto] = useState<Proyecto | null>(null),
     [error, setError] = useState('');
   const [administracion, setAdministracion] = useState(false);
+  const [consulta, setConsulta] = useState<ConsultaProyectos>(consultaInicial);
+  useEffect(() => {
+    setConsulta(consultaInicial);
+    setProyecto(null);
+    setAdministracion(false);
+  }, [sesion?.usuario.id]);
   const guardia = useRef<(() => boolean) | null>(null);
   const registrarSalida = useCallback((g: (() => boolean) | null) => {
     guardia.current = g;
@@ -116,7 +123,12 @@ export function App() {
             registrarSalida={registrarSalida}
           />
         ) : (
-          <ProyectosPage abrir={setProyecto} registrarSalida={registrarSalida} />
+          <ProyectosPage
+            consulta={consulta}
+            cambiarConsulta={setConsulta}
+            abrir={setProyecto}
+            registrarSalida={registrarSalida}
+          />
         )}
       </section>
     </div>

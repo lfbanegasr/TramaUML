@@ -1305,6 +1305,580 @@ class NucleoIntegracionTest {
                 .andExpect(status().isOk());
     }
 
+    private JsonNode resumen(Cliente c, String id) throws Exception {
+        return respuesta(
+                mvc.perform(get("/api/proyectos/" + id).cookie(c.sesion()))
+                        .andExpect(status().isOk()));
+    }
+
+    private Map<String, Object> actualizacion(JsonNode p, String nombre, UUID solicitud) {
+        return Map.of(
+                "codigo",
+                p.get("codigo").asText(),
+                "nombre",
+                nombre,
+                "descripcion",
+                "Descripción actualizada",
+                "revision",
+                p.get("revision").asText(),
+                "idSolicitudCliente",
+                solicitud);
+    }
+
+    private Map<String, Object> transicion(JsonNode p) {
+        return Map.of(
+                "revision",
+                p.get("revision").asText(),
+                "idSolicitudCliente",
+                UUID.randomUUID(),
+                "confirmar",
+                true);
+    }
+
+    private UUID miembroFixture(UUID proyecto, UUID cuenta, String codigoRol) {
+        UUID id = UUID.randomUUID();
+        jdbc.update(
+                "insert into uml_colaborativo.miembro_proyecto(id,id_proyecto,id_usuario)"
+                        + " values(?,?,?)",
+                id,
+                proyecto,
+                cuenta);
+        jdbc.update(
+                "insert into uml_colaborativo.rol_miembro_proyecto(id_miembro_proyecto,id_rol)"
+                        + " values(?,?)",
+                id,
+                rol(codigoRol));
+        return id;
+    }
+
+    private long actividad(String proyecto) {
+        return jdbc.queryForObject(
+                "select count(*) from uml_colaborativo.actividad_proyecto where id_proyecto=?",
+                Long.class,
+                UUID.fromString(proyecto));
+    }
+
+    @Test
+    void proyectosFiltradosPorRolFechaYPaginaConAutorizacionRenovada() throws Exception {
+        var a = login(usuario, clave);
+        var rolesConsulta =
+                respuesta(
+                        mvc.perform(get("/api/proyectos/roles-consulta").cookie(a.sesion()))
+                                .andExpect(status().isOk()));
+        assertThat(rolesConsulta.isArray()).isTrue();
+        for (var r : rolesConsulta)
+            assertThat(r.get("codigo").isTextual())
+                    .as("CITEXT debe exponerse como código de texto")
+                    .isTrue();
+        var p = proyecto(a);
+        var otro = proyecto(a);
+        String u = "consulta_" + UUID.randomUUID();
+        UUID cuenta = fixture(u);
+        var c = login(u, clave);
+        UUID miembro =
+                miembroFixture(UUID.fromString(p.get("id").asText()), cuenta, "LECTOR_PROYECTO");
+        miembroFixture(UUID.fromString(otro.get("id").asText()), cuenta, "EDITOR_PROYECTO");
+        jdbc.update(
+                "update uml_colaborativo.proyecto set creado_en='2026-09-01T23:59:59Z' where id=?",
+                UUID.fromString(p.get("id").asText()));
+        jdbc.update(
+                "update uml_colaborativo.proyecto set creado_en='2026-09-02T00:00:00Z' where id=?",
+                UUID.fromString(otro.get("id").asText()));
+        mvc.perform(
+                        get("/api/proyectos")
+                                .cookie(c.sesion())
+                                .param("desde", "2026-09-01")
+                                .param("hasta", "2026-09-01")
+                                .param("rol", "LECTOR_PROYECTO"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.proyectos[0].id").value(p.get("id").asText()));
+        var primera =
+                respuesta(
+                        mvc.perform(get("/api/proyectos").cookie(c.sesion()).param("tamano", "1"))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.total").value(2)));
+        var segunda =
+                respuesta(
+                        mvc.perform(
+                                        get("/api/proyectos")
+                                                .cookie(c.sesion())
+                                                .param("tamano", "1")
+                                                .param("pagina", "1"))
+                                .andExpect(status().isOk()));
+        assertThat(primera.get("proyectos").get(0).get("id"))
+                .isNotEqualTo(segunda.get("proyectos").get(0).get("id"));
+        mvc.perform(get("/api/proyectos/" + p.get("id").asText() + "/equipo").cookie(c.sesion()))
+                .andExpect(status().isOk());
+        jdbc.update(
+                "update uml_colaborativo.miembro_proyecto set estado='RETIRADO' where id=?",
+                miembro);
+        mvc.perform(get("/api/proyectos/" + p.get("id").asText()).cookie(c.sesion()))
+                .andExpect(status().isNotFound());
+        mvc.perform(get("/api/proyectos/" + p.get("id").asText() + "/equipo").cookie(c.sesion()))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void consultaRechazaFechasYPaginacionInvalidas() throws Exception {
+        var a = login(usuario, clave);
+        String id = proyecto(a).get("id").asText();
+        for (String ruta : List.of("/api/proyectos", "/api/proyectos/" + id + "/actividad")) {
+            mvc.perform(
+                            get(ruta)
+                                    .cookie(a.sesion())
+                                    .param("desde", "2026-09-15")
+                                    .param("hasta", "2026-09-01"))
+                    .andExpect(status().isBadRequest());
+            mvc.perform(get(ruta).cookie(a.sesion()).param("tamano", "101"))
+                    .andExpect(status().isBadRequest());
+            mvc.perform(get(ruta).cookie(a.sesion()).param("pagina", "-1"))
+                    .andExpect(status().isBadRequest());
+            mvc.perform(get(ruta).cookie(a.sesion()).param("desde", "no-fecha"))
+                    .andExpect(status().isBadRequest());
+        }
+    }
+
+    @Test
+    void actualizacionEsIdempotenteYDetectaRevisionObsoleta() throws Exception {
+        var a = login(usuario, clave);
+        var p = proyecto(a);
+        String id = p.get("id").asText();
+        long antes = actividad(id);
+        UUID uuid = UUID.randomUUID();
+        var datos = actualizacion(p, "Nombre actualizado", uuid);
+        var nuevo =
+                respuesta(
+                        escribir(a, put("/api/proyectos/" + id), datos)
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.nombre").value("Nombre actualizado")));
+        assertThat(nuevo.get("revision").asText()).isNotEqualTo(p.get("revision").asText());
+        escribir(a, put("/api/proyectos/" + id), datos).andExpect(status().isOk());
+        assertThat(actividad(id)).isEqualTo(antes + 1);
+        escribir(a, put("/api/proyectos/" + id), actualizacion(p, "Obsoleta", UUID.randomUUID()))
+                .andExpect(status().isConflict());
+        escribir(a, put("/api/proyectos/" + id), actualizacion(p, "UUID reutilizado", uuid))
+                .andExpect(status().isConflict());
+        assertThat(resumen(a, id).get("nombre").asText()).isEqualTo("Nombre actualizado");
+        assertThat(actividad(id)).isEqualTo(antes + 1);
+    }
+
+    @Test
+    void gestionDenegadaNoProduceCambiosNiActividad() throws Exception {
+        var a = login(usuario, clave);
+        var p = proyecto(a);
+        String id = p.get("id").asText();
+        String u = "gestion_" + UUID.randomUUID();
+        UUID cuenta = fixture(u);
+        var c = login(u, clave);
+        String codigo = "GESTION_" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        escribir(
+                        a,
+                        post("/api/administracion/roles"),
+                        Map.of(
+                                "codigo",
+                                codigo,
+                                "nombre",
+                                codigo,
+                                "ambito",
+                                "PROYECTO",
+                                "estado",
+                                "ACTIVO",
+                                "permisos",
+                                List.of(
+                                        permiso("VER_PROYECTOS"),
+                                        permiso("GESTIONAR_PROYECTOS"),
+                                        permiso("VER_ACTIVIDAD"))))
+                .andExpect(status().isCreated());
+        UUID miembro = miembroFixture(UUID.fromString(id), cuenta, codigo);
+        assertThat(resumen(c, id).get("puedeGestionarProyecto").asBoolean()).isTrue();
+        jdbc.update(
+                "insert into"
+                    + " uml_colaborativo.permiso_miembro_proyecto(id_miembro_proyecto,id_permiso,decision)"
+                    + " values(?,?,'DENEGAR')",
+                miembro,
+                permiso("GESTIONAR_PROYECTOS"));
+        long antes = actividad(id);
+        assertThat(resumen(c, id).get("puedeGestionarProyecto").asBoolean()).isFalse();
+        escribir(c, put("/api/proyectos/" + id), actualizacion(p, "Denegado", UUID.randomUUID()))
+                .andExpect(status().isForbidden());
+        escribir(c, post("/api/proyectos/" + id + "/archivar"), transicion(p))
+                .andExpect(status().isForbidden());
+        assertThat(actividad(id)).isEqualTo(antes);
+        escribir(
+                        a,
+                        put("/api/proyectos/" + id),
+                        Map.of(
+                                "codigo",
+                                p.get("codigo").asText(),
+                                "nombre",
+                                "",
+                                "revision",
+                                p.get("revision").asText(),
+                                "idSolicitudCliente",
+                                UUID.randomUUID()))
+                .andExpect(status().isBadRequest());
+        mvc.perform(
+                        post("/api/proyectos/" + id + "/archivar")
+                                .cookie(c.sesion())
+                                .contentType("application/json")
+                                .content(json.writeValueAsString(transicion(p))))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void archivoConSesionesActivasYReactivacionRespetanModelo() throws Exception {
+        var a = login(usuario, clave);
+        var p = proyecto(a);
+        String id = p.get("id").asText(), modelo = p.get("idModelo").asText();
+        UUID sesion = UUID.randomUUID();
+        long antes = actividad(id);
+        jdbc.update(
+                "insert into"
+                    + " uml_colaborativo.sesion_edicion_modelo(id,id_modelo,abierto_por,modo,revision_base)"
+                    + " values(?,?,?,'EDICION',1)",
+                sesion,
+                UUID.fromString(modelo),
+                admin);
+        escribir(a, post("/api/proyectos/" + id + "/archivar"), transicion(p))
+                .andExpect(status().isConflict());
+        assertThat(actividad(id)).isEqualTo(antes);
+        assertThat(
+                        jdbc.queryForObject(
+                                "select estado from uml_colaborativo.sesion_edicion_modelo where"
+                                        + " id=?",
+                                String.class,
+                                sesion))
+                .isEqualTo("ACTIVO");
+        jdbc.update(
+                "update uml_colaborativo.sesion_edicion_modelo set"
+                        + " estado='CERRADO',cerrado_en=clock_timestamp() where id=?",
+                sesion);
+        jdbc.update(
+                "insert into"
+                    + " uml_colaborativo.sesion_edicion_modelo(id_modelo,abierto_por,modo,revision_base)"
+                    + " values(?,?,'SOLO_LECTURA',1)",
+                UUID.fromString(modelo),
+                admin);
+        var datos = transicion(p);
+        var archivado =
+                respuesta(
+                        escribir(a, post("/api/proyectos/" + id + "/archivar"), datos)
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.estado").value("ARCHIVADO"))
+                                .andExpect(jsonPath("$.puedeEditar").value(false)));
+        escribir(a, post("/api/proyectos/" + id + "/archivar"), datos).andExpect(status().isOk());
+        assertThat(actividad(id)).isEqualTo(antes + 1);
+        mvc.perform(get("/api/modelos/" + modelo).cookie(a.sesion()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.puedeEditar").value(false));
+        enviar(a, modelo, cambio(1, UUID.randomUUID(), clase(UUID.randomUUID(), "Imposible")))
+                .andExpect(status().isConflict());
+        escribir(
+                        a,
+                        put("/api/proyectos/" + id),
+                        actualizacion(archivado, "Archivo modificado", UUID.randomUUID()))
+                .andExpect(status().isConflict());
+        var reactivado =
+                respuesta(
+                        escribir(
+                                        a,
+                                        post("/api/proyectos/" + id + "/reactivar"),
+                                        transicion(archivado))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.estado").value("ACTIVO")));
+        assertThat(reactivado.get("archivadoEn").isNull()).isTrue();
+        assertThat(actividad(id)).isEqualTo(antes + 2);
+        enviar(a, modelo, cambio(1, UUID.randomUUID(), clase(UUID.randomUUID(), "Permitida")))
+                .andExpect(status().isOk());
+    }
+
+    @Autowired javax.sql.DataSource datasource;
+
+    @Test
+    void archivoNoInterfiereConTransaccionDeEdicionEnCurso() throws Exception {
+        var a = login(usuario, clave);
+        var p = proyecto(a);
+        String id = p.get("id").asText();
+        long antes = actividad(id);
+        try (var conexion = datasource.getConnection()) {
+            conexion.setAutoCommit(false);
+            try (var s =
+                    conexion.prepareStatement(
+                            "select uml_colaborativo.iniciar_edicion_modelo(?,1,?)")) {
+                s.setObject(1, UUID.fromString(p.get("idModelo").asText()));
+                s.setObject(2, admin);
+                s.execute();
+            }
+            escribir(a, post("/api/proyectos/" + id + "/archivar"), transicion(p))
+                    .andExpect(status().isConflict());
+            conexion.rollback();
+        }
+        assertThat(actividad(id)).isEqualTo(antes);
+        assertThat(resumen(a, id).get("estado").asText()).isEqualTo("ACTIVO");
+    }
+
+    @Test
+    void actualizacionConcurrenteSoloConfirmaUnaSolicitud() throws Exception {
+        var a = login(usuario, clave);
+        var p = proyecto(a);
+        String id = p.get("id").asText();
+        long antes = actividad(id);
+        var inicio = new CountDownLatch(1);
+        var pool = Executors.newFixedThreadPool(2);
+        try {
+            var tareas = new ArrayList<Future<Integer>>();
+            for (String nombre : List.of("Concurrente A", "Concurrente B"))
+                tareas.add(
+                        pool.submit(
+                                () -> {
+                                    inicio.await();
+                                    return escribir(
+                                                    a,
+                                                    put("/api/proyectos/" + id),
+                                                    actualizacion(p, nombre, UUID.randomUUID()))
+                                            .andReturn()
+                                            .getResponse()
+                                            .getStatus();
+                                }));
+            inicio.countDown();
+            assertThat(
+                            List.of(
+                                    tareas.get(0).get(10, TimeUnit.SECONDS),
+                                    tareas.get(1).get(10, TimeUnit.SECONDS)))
+                    .containsExactlyInAnyOrder(200, 409);
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(actividad(id)).isEqualTo(antes + 1);
+    }
+
+    @Test
+    void falloDeUnicidadRevierteDatosRevisionYActividad() throws Exception {
+        var a = login(usuario, clave);
+        var p = proyecto(a);
+        var otro = proyecto(a);
+        String id = p.get("id").asText();
+        long antes = actividad(id);
+        var datos = new HashMap<>(actualizacion(p, "No confirmado", UUID.randomUUID()));
+        datos.put("codigo", otro.get("codigo").asText());
+        escribir(a, put("/api/proyectos/" + id), datos).andExpect(status().isConflict());
+        assertThat(resumen(a, id).get("revision")).isEqualTo(p.get("revision"));
+        assertThat(resumen(a, id).get("nombre")).isEqualTo(p.get("nombre"));
+        assertThat(actividad(id)).isEqualTo(antes);
+    }
+
+    @Test
+    void actividadPaginadaFiltradaYDetalleRespetanProyecto() throws Exception {
+        var a = login(usuario, clave);
+        var p = proyecto(a);
+        String id = p.get("id").asText();
+        var primera =
+                respuesta(
+                        mvc.perform(
+                                        get("/api/proyectos/" + id + "/actividad")
+                                                .cookie(a.sesion())
+                                                .param("tamano", "1"))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.total").value(2)));
+        var segunda =
+                respuesta(
+                        mvc.perform(
+                                        get("/api/proyectos/" + id + "/actividad")
+                                                .cookie(a.sesion())
+                                                .param("tamano", "1")
+                                                .param("pagina", "1"))
+                                .andExpect(status().isOk()));
+        assertThat(primera.get("eventos").get(0).get("id").isTextual()).isTrue();
+        assertThat(primera.get("eventos").get(0).get("id"))
+                .isNotEqualTo(segunda.get("eventos").get(0).get("id"));
+        var actual =
+                respuesta(
+                        escribir(
+                                        a,
+                                        put("/api/proyectos/" + id),
+                                        actualizacion(p, "Auditado", UUID.randomUUID()))
+                                .andExpect(status().isOk()));
+        String hoy = java.time.LocalDate.now(java.time.ZoneOffset.UTC).toString();
+        var filtro =
+                respuesta(
+                        mvc.perform(
+                                        get("/api/proyectos/" + id + "/actividad")
+                                                .cookie(a.sesion())
+                                                .param("accion", "ACTUALIZAR")
+                                                .param("responsable", admin.toString())
+                                                .param("tipo", "PROYECTO")
+                                                .param("entidad", id)
+                                                .param("desde", hoy)
+                                                .param("hasta", hoy))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.total").value(1)));
+        String evento = filtro.get("eventos").get(0).get("id").asText();
+        mvc.perform(get("/api/proyectos/" + id + "/actividad/" + evento).cookie(a.sesion()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.valorAnterior.nombre").value(p.get("nombre").asText()))
+                .andExpect(
+                        jsonPath("$.valorPosterior.nombre").value(actual.get("nombre").asText()));
+        mvc.perform(
+                        get("/api/proyectos/"
+                                        + proyecto(a).get("id").asText()
+                                        + "/actividad/"
+                                        + evento)
+                                .cookie(a.sesion()))
+                .andExpect(status().isNotFound());
+        mvc.perform(
+                        get("/api/proyectos/" + id + "/actividad")
+                                .cookie(a.sesion())
+                                .param("accion", "INEXISTENTE"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.eventos").isEmpty());
+        String u = "actividad_" + UUID.randomUUID();
+        UUID cuenta = fixture(u);
+        var c = login(u, clave);
+        mvc.perform(get("/api/proyectos/" + id + "/actividad").cookie(c.sesion()))
+                .andExpect(status().isNotFound());
+        UUID m = miembroFixture(UUID.fromString(id), cuenta, "LECTOR_PROYECTO");
+        jdbc.update(
+                "insert into"
+                    + " uml_colaborativo.permiso_miembro_proyecto(id_miembro_proyecto,id_permiso,decision)"
+                    + " values(?,?,'DENEGAR')",
+                m,
+                permiso("VER_ACTIVIDAD"));
+        for (String sufijo : List.of("", "/filtros", "/" + evento))
+            mvc.perform(get("/api/proyectos/" + id + "/actividad" + sufijo).cookie(c.sesion()))
+                    .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void actividadUmlTieneValoresVersionYNoSeDuplicaEnReenvios() throws Exception {
+        var a = login(usuario, clave);
+        var p = proyecto(a);
+        String id = p.get("id").asText(), modelo = p.get("idModelo").asText();
+        UUID clase = UUID.randomUUID();
+        String peticion = cambio(1, UUID.randomUUID(), clase(clase, "Antes"));
+        var confirmado = respuesta(enviar(a, modelo, peticion).andExpect(status().isOk()));
+        long cantidad = actividad(id);
+        enviar(a, modelo, peticion).andExpect(status().isOk());
+        assertThat(actividad(id)).isEqualTo(cantidad);
+        var f =
+                respuesta(
+                        mvc.perform(
+                                        get("/api/proyectos/" + id + "/actividad")
+                                                .cookie(a.sesion())
+                                                .param("entidad", clase.toString()))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.total").value(1)));
+        String evento = f.get("eventos").get(0).get("id").asText();
+        mvc.perform(get("/api/proyectos/" + id + "/actividad/" + evento).cookie(a.sesion()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.valorAnterior").doesNotExist())
+                .andExpect(jsonPath("$.valorPosterior.nombre").value("Antes"))
+                .andExpect(
+                        jsonPath("$.evento.idVersionModelo")
+                                .value(confirmado.get("idVersion").asText()))
+                .andExpect(jsonPath("$.evento.revisionModelo").value(2));
+        enviar(
+                        a,
+                        modelo,
+                        cambio(
+                                2,
+                                UUID.randomUUID(),
+                                Map.of(
+                                        "operacion",
+                                        "ACTUALIZAR",
+                                        "entidad",
+                                        "CLASE",
+                                        "idEntidad",
+                                        clase,
+                                        "datos",
+                                        Map.of("nombre", "Después"))))
+                .andExpect(status().isOk());
+        var cambios =
+                respuesta(
+                        mvc.perform(
+                                        get("/api/proyectos/" + id + "/actividad")
+                                                .cookie(a.sesion())
+                                                .param("entidad", clase.toString())
+                                                .param("accion", "ACTUALIZAR"))
+                                .andExpect(status().isOk()));
+        mvc.perform(
+                        get("/api/proyectos/"
+                                        + id
+                                        + "/actividad/"
+                                        + cambios.get("eventos").get(0).get("id").asText())
+                                .cookie(a.sesion()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.valorAnterior.nombre").value("Antes"))
+                .andExpect(jsonPath("$.valorPosterior.nombre").value("Después"));
+        long antes = actividad(id);
+        enviar(
+                        a,
+                        modelo,
+                        cambio(
+                                3,
+                                UUID.randomUUID(),
+                                clase(UUID.randomUUID(), "Rollback"),
+                                clase(UUID.randomUUID(), "Después")))
+                .andExpect(status().isConflict());
+        assertThat(actividad(id)).isEqualTo(antes);
+        assertThat(
+                        jdbc.queryForObject(
+                                "select revision_actual from uml_colaborativo.modelo_uml where"
+                                        + " id=?",
+                                Long.class,
+                                UUID.fromString(modelo)))
+                .isEqualTo(3);
+    }
+
+    @Test
+    void actividadOrdenaEmpatesPorIdYFiltraFechasUtc() throws Exception {
+        var a = login(usuario, clave);
+        String id = proyecto(a).get("id").asText();
+        var esperados = new ArrayList<String>();
+        for (int i = 0; i < 3; i++)
+            esperados.add(
+                    jdbc.queryForObject(
+                            "insert into"
+                                + " uml_colaborativo.actividad_proyecto(id_proyecto,id_usuario_actor,categoria,accion,ocurrido_en)"
+                                + " values(?,?,'PRUEBA','PAGINA','2026-09-01T23:59:59Z') returning"
+                                + " id::text",
+                            String.class,
+                            UUID.fromString(id),
+                            admin));
+        Collections.reverse(esperados);
+        var reales = new ArrayList<String>();
+        for (int i = 0; i < 3; i++) {
+            var p =
+                    respuesta(
+                            mvc.perform(
+                                            get("/api/proyectos/" + id + "/actividad")
+                                                    .cookie(a.sesion())
+                                                    .param("accion", "PAGINA")
+                                                    .param("desde", "2026-09-01")
+                                                    .param("hasta", "2026-09-01")
+                                                    .param("tamano", "1")
+                                                    .param("pagina", String.valueOf(i)))
+                                    .andExpect(status().isOk())
+                                    .andExpect(jsonPath("$.total").value(3)));
+            reales.add(p.get("eventos").get(0).get("id").asText());
+        }
+        assertThat(reales).containsExactlyElementsOf(esperados);
+        mvc.perform(
+                        get("/api/proyectos/" + id + "/actividad")
+                                .cookie(a.sesion())
+                                .param("accion", "PAGINA")
+                                .param("desde", "2026-09-02")
+                                .param("hasta", "2026-09-02"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(0));
+        mvc.perform(
+                        get("/api/proyectos/" + id + "/actividad/" + esperados.getFirst())
+                                .cookie(a.sesion()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.valorAnterior").doesNotExist())
+                .andExpect(jsonPath("$.valorPosterior").doesNotExist());
+    }
+
     @Test
     void parametrosAjenosNoSeReasignan() throws Exception {
         var c = login(usuario, clave);

@@ -35,5 +35,13 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     if (r.status === 401) window.dispatchEvent(new Event('sesion-vencida'));
     throw new ApiError(r.status, error.mensaje ?? 'No se pudo completar la operación.');
   }
-  return r.status === 204 ? (undefined as T) : (r.json() as Promise<T>);
+  if (r.status === 204) return undefined as T;
+  try {
+    return (await r.json()) as T;
+  } catch {
+    throw new ApiError(
+      0,
+      'La respuesta quedó incompleta. Conservamos la solicitud para comprobar el resultado al reintentar.',
+    );
+  }
 }

@@ -1,18 +1,38 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { listarProyectos, crearProyecto, type Pagina, type Proyecto } from '../api/proyectosApi';
+import {
+  listarProyectos,
+  crearProyecto,
+  consultarProyecto,
+  rolesConsulta,
+  consultaInicial,
+  type ConsultaProyectos,
+  type Pagina,
+  type Proyecto,
+} from '../api/proyectosApi';
 import { useSesion } from '../../acceso/estado/SesionProvider';
 import { MiembrosPanel } from '../components/MiembrosPanel';
+import { ProyectoResumen } from '../components/ProyectoResumen';
 export function ProyectosPage({
   abrir,
   registrarSalida,
+  consulta,
+  cambiarConsulta,
 }: {
   abrir: (p: Proyecto) => void;
   registrarSalida: (g: (() => boolean) | null) => void;
+  consulta: ConsultaProyectos;
+  cambiarConsulta: (c: ConsultaProyectos) => void;
 }) {
   const { sesion } = useSesion();
-  const [filtro, setFiltro] = useState(''),
-    [estado, setEstado] = useState(''),
-    [pagina, setPagina] = useState(0);
+  const { filtro, estado, rol, desde, hasta, pagina } = consulta;
+  const cambiar = (c: Partial<ConsultaProyectos>) =>
+    cambiarConsulta({ ...consulta, pagina: 0, ...c });
+  const [roles, setRoles] = useState<{ codigo: string; nombre: string }[]>([]);
+  const [resumen, setResumen] = useState<string | null>(null);
+  const guardiaResumen = useRef<(() => boolean) | null>(null);
+  const registrarResumen = useCallback((g: (() => boolean) | null) => {
+    guardiaResumen.current = g;
+  }, []);
   const [datos, setDatos] = useState<Pagina | null>(null),
     [error, setError] = useState(''),
     [cargando, setCargando] = useState(true);
@@ -27,11 +47,33 @@ export function ProyectosPage({
   const salida = useCallback(
     () =>
       !guardando &&
+      (!guardiaResumen.current || guardiaResumen.current()) &&
       (guardiaMiembros.current
         ? guardiaMiembros.current()
         : !crear || window.confirm('¿Salir y descartar el proyecto sin guardar?')),
     [guardando, crear],
   );
+  useEffect(() => {
+    let activo = true;
+    rolesConsulta()
+      .then((r) => {
+        if (activo) setRoles(r);
+      })
+      .catch((e) => {
+        if (activo) setError(e.message);
+      });
+    return () => {
+      activo = false;
+    };
+  }, [recarga]);
+  async function abrirAutorizado(p: Proyecto) {
+    setError('');
+    try {
+      abrir(await consultarProyecto(p.id));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
   useEffect(() => {
     registrarSalida(salida);
     return () => registrarSalida(null);
@@ -42,7 +84,7 @@ export function ProyectosPage({
     setError('');
     const t = setTimeout(
       () =>
-        listarProyectos(filtro, estado, pagina)
+        listarProyectos(consulta)
           .then((d) => {
             if (activo) setDatos(d);
           })
@@ -61,7 +103,7 @@ export function ProyectosPage({
       activo = false;
       clearTimeout(t);
     };
-  }, [filtro, estado, pagina, recarga]);
+  }, [consulta, recarga]);
   async function guardar(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setGuardando(true);
@@ -83,6 +125,18 @@ export function ProyectosPage({
   }
   return (
     <div className="page">
+      {resumen && (
+        <ProyectoResumen
+          proyecto={resumen}
+          cerrar={() => {
+            setResumen(null);
+            setRecarga((r) => r + 1);
+          }}
+          abrir={abrirAutorizado}
+          registrarSalida={registrarResumen}
+          actualizado={() => setRecarga((r) => r + 1)}
+        />
+      )}
       {miembros && (
         <MiembrosPanel
           registrarSalida={registrarMiembros}
@@ -109,16 +163,14 @@ export function ProyectosPage({
           placeholder="⌕  Buscar por nombre o código"
           value={filtro}
           onChange={(e) => {
-            setFiltro(e.target.value);
-            setPagina(0);
+            cambiar({ filtro: e.target.value });
           }}
         />
         <select
           aria-label="Estado de proyectos"
           value={estado}
           onChange={(e) => {
-            setEstado(e.target.value);
-            setPagina(0);
+            cambiar({ estado: e.target.value });
           }}
         >
           <option value="">Todos los estados</option>
@@ -126,7 +178,44 @@ export function ProyectosPage({
           <option value="ARCHIVADO">Archivados</option>
           <option value="SUSPENDIDO">Suspendidos</option>
         </select>
+        <select
+          aria-label="Rol en proyectos"
+          value={rol}
+          onChange={(e) => cambiar({ rol: e.target.value })}
+        >
+          <option value="">Todos mis roles</option>
+          {sesion?.usuario.rolesGlobales.includes('SUPERADMINISTRADOR') && (
+            <option value="SUPERADMINISTRADOR">Superadministrador</option>
+          )}
+          {roles.map((r) => (
+            <option key={r.codigo} value={r.codigo}>
+              {r.nombre}
+            </option>
+          ))}
+        </select>
         <span className="muted">{datos?.total ?? '—'} proyectos</span>
+      </div>
+      <div className="date-filters">
+        <span className="muted">Fecha de creación (UTC)</span>
+        <label>
+          Desde
+          <input
+            type="date"
+            aria-label="Proyectos creados desde"
+            value={desde}
+            onChange={(e) => cambiar({ desde: e.target.value })}
+          />
+        </label>
+        <label>
+          Hasta
+          <input
+            type="date"
+            aria-label="Proyectos creados hasta"
+            value={hasta}
+            onChange={(e) => cambiar({ hasta: e.target.value })}
+          />
+        </label>
+        <button onClick={() => cambiarConsulta({ ...consultaInicial })}>Limpiar filtros</button>
       </div>
       {error && (
         <div className="error" role="alert">
@@ -139,10 +228,14 @@ export function ProyectosPage({
       ) : datos?.proyectos.length === 0 ? (
         <div className="empty">
           <span className="empty-icon">◇</span>
-          <h2>{filtro || estado ? 'No hay coincidencias' : 'Tu próximo modelo empieza aquí'}</h2>
+          <h2>
+            {filtro || estado || rol || desde || hasta
+              ? 'No hay coincidencias'
+              : 'Tu próximo modelo empieza aquí'}
+          </h2>
           <p>
-            {filtro || estado
-              ? 'Prueba con otro nombre o estado.'
+            {filtro || estado || rol || desde || hasta
+              ? 'Prueba con otros filtros.'
               : 'Crea un proyecto o solicita a su propietario que te incorpore.'}
           </p>
         </div>
@@ -173,11 +266,17 @@ export function ProyectosPage({
                   Miembros del proyecto
                 </button>
               )}
+              <button className="wide" onClick={() => setResumen(p.id)}>
+                Ver resumen y actividad
+              </button>
               <div className="card-action">
                 <span className="muted">
                   {p.puedeEditar ? 'Edición disponible' : 'Solo lectura'}
                 </span>
-                <button disabled={!p.puedeVerModelo || !p.idModelo} onClick={() => abrir(p)}>
+                <button
+                  disabled={!p.puedeVerModelo || !p.idModelo}
+                  onClick={() => abrirAutorizado(p)}
+                >
                   Abrir modelo ↗
                 </button>
               </div>
@@ -187,13 +286,13 @@ export function ProyectosPage({
       )}
       {datos && datos.total > datos.tamano && (
         <div className="pagination">
-          <button disabled={pagina === 0} onClick={() => setPagina((p) => p - 1)}>
+          <button disabled={pagina === 0} onClick={() => cambiar({ pagina: pagina - 1 })}>
             Anterior
           </button>
           <span>Página {pagina + 1}</span>
           <button
             disabled={(pagina + 1) * datos.tamano >= datos.total}
-            onClick={() => setPagina((p) => p + 1)}
+            onClick={() => cambiar({ pagina: pagina + 1 })}
           >
             Siguiente
           </button>

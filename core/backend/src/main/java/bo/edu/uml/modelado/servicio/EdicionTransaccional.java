@@ -4,6 +4,7 @@ import bo.edu.uml.acceso.modelo.Identidad;
 import bo.edu.uml.compartido.ApiException;
 import bo.edu.uml.modelado.dto.ModeladoDto.*;
 import bo.edu.uml.modelado.repositorio.*;
+import bo.edu.uml.proyectos.repositorio.ActividadRepositorio;
 
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
@@ -16,14 +17,20 @@ public class EdicionTransaccional {
     private final ModeloRepositorio modelos;
     private final ElementoRepositorio elementos;
     private final ApplicationEventPublisher eventos;
+    private final ActividadElementoRepositorio valores;
+    private final ActividadRepositorio actividad;
 
     public EdicionTransaccional(
             ModeloRepositorio modelos,
             ElementoRepositorio elementos,
-            ApplicationEventPublisher eventos) {
+            ApplicationEventPublisher eventos,
+            ActividadElementoRepositorio valores,
+            ActividadRepositorio actividad) {
         this.modelos = modelos;
         this.elementos = elementos;
         this.eventos = eventos;
+        this.valores = valores;
+        this.actividad = actividad;
     }
 
     public record ModeloConfirmado(UUID modelo, UUID actor, long revision, UUID version) {}
@@ -40,6 +47,9 @@ public class EdicionTransaccional {
                         parche);
         if (previo.isPresent()) return previo.get();
         long revision = modelos.iniciar(modelo, cambio.revisionBase(), actor.id());
+        UUID proyecto = modelos.cabecera(modelo).proyecto();
+        record Registro(Accion accion, String anterior, String posterior) {}
+        List<Registro> registros = new ArrayList<>();
         for (Accion a : cambio.acciones()) {
             boolean reubicaClase =
                     a.entidad().equals("CLASE")
@@ -55,7 +65,9 @@ public class EdicionTransaccional {
                     && !modelos.permiso(
                             actor.id(), modelos.cabecera(modelo).proyecto(), "ORGANIZAR_MODELO"))
                 throw new ApiException(403, "No tienes permiso para organizar el diagrama.");
+            String anterior = valores.valores(modelo, a);
             elementos.aplicar(modelo, actor.id(), a);
+            registros.add(new Registro(a, anterior, valores.valores(modelo, a)));
         }
         Accion primera = cambio.acciones().getFirst();
         modelos.registrar(
@@ -75,6 +87,30 @@ public class EdicionTransaccional {
                         revision,
                         actor.id(),
                         "Edición manual: " + cambio.acciones().size() + " operación(es)");
+        for (int i = 0; i < registros.size(); i++) {
+            var r = registros.get(i);
+            actividad.registrar(
+                    proyecto,
+                    actor.id(),
+                    "MODELADO",
+                    r.accion().operacion(),
+                    r.accion().entidad(),
+                    r.accion().idEntidad(),
+                    modelo,
+                    version,
+                    r.anterior(),
+                    r.posterior(),
+                    actividad.escribir(
+                            Map.of(
+                                    "idCambioCliente",
+                                    cambio.idCambioCliente(),
+                                    "indiceAccion",
+                                    i,
+                                    "revisionBase",
+                                    cambio.revisionBase(),
+                                    "revisionAplicada",
+                                    revision)));
+        }
         eventos.publishEvent(new ModeloConfirmado(modelo, actor.id(), revision, version));
         return new Confirmacion(cambio.idCambioCliente(), revision, version, false);
     }
