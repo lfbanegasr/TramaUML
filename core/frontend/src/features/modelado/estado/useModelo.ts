@@ -23,6 +23,7 @@ export function useModelo(id: string) {
   const [conflicto, setConflicto] = useState(false),
     [mensaje, setMensaje] = useState('');
   const [desactualizado, setDesactualizado] = useState(false);
+  const [senalConflictos, setSenalConflictos] = useState(0);
   const [sesion, setSesion] = useState<SesionColaborativa | null>(null);
   const [colaboracion, setColaboracion] = useState<'CONECTANDO' | 'CONECTADO' | 'LIMITADO'>(
     'CONECTANDO',
@@ -127,6 +128,13 @@ export function useModelo(id: string) {
             return;
           }
           void cambioRemoto(evento.datos.revision);
+        } else if (evento.tipo === 'CONFLICTO_ACTUALIZADO') {
+          setSenalConflictos((valor) => valor + 1);
+          setMensaje(
+            evento.datos.estado === 'ABIERTO'
+              ? 'Hay una propuesta en conflicto pendiente de revisión.'
+              : 'Se actualizó la resolución de un conflicto.',
+          );
         } else if (evento.tipo === 'ERROR') {
           setError(evento.datos.mensaje ?? 'El canal colaborativo rechazó la operación.');
         }
@@ -302,5 +310,6 @@ export function useModelo(id: string) {
     salir: () => salirRef.current(),
     enfocar: (tipo: string | null, entidad: string | null) => enfocarRef.current(tipo, entidad),
     registrarBorrador,
+    senalConflictos,
   };
 }

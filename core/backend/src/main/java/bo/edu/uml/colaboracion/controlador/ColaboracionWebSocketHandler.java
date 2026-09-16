@@ -3,6 +3,7 @@ package bo.edu.uml.colaboracion.controlador;
 import bo.edu.uml.acceso.modelo.Identidad;
 import bo.edu.uml.colaboracion.dto.ColaboracionDto.*;
 import bo.edu.uml.colaboracion.servicio.ColaboracionServicio;
+import bo.edu.uml.colaboracion.servicio.ConflictoServicio.ConflictoActualizado;
 import bo.edu.uml.compartido.ApiException;
 import bo.edu.uml.modelado.servicio.EdicionTransaccional.ModeloConfirmado;
 
@@ -148,6 +149,23 @@ public class ColaboracionWebSocketHandler extends TextWebSocketHandler {
                                 cambio.revision(),
                                 "version",
                                 cambio.version())));
+    }
+
+    public void publicarConflicto(ConflictoActualizado conflicto) {
+        publicar(
+                conflicto.modelo(),
+                null,
+                new Evento(
+                        "CONFLICTO_ACTUALIZADO",
+                        Map.of(
+                                "modelo",
+                                conflicto.modelo(),
+                                "conflicto",
+                                conflicto.conflicto(),
+                                "estado",
+                                conflicto.estado(),
+                                "revision",
+                                conflicto.revision())));
     }
 
     public void revisarAccesos(UUID proyecto) {

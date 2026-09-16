@@ -79,7 +79,7 @@ public class ModeloRepositorio {
                 UUID.class);
     }
 
-    public void registrar(
+    public UUID registrar(
             UUID modelo,
             UUID sesion,
             UUID cliente,
@@ -90,13 +90,15 @@ public class ModeloRepositorio {
             String entidad,
             UUID id,
             String parche) {
+        UUID cambio = UUID.randomUUID();
         jdbc.update(
                 """
-                insert into uml_colaborativo.cambio_modelo(id_modelo,id_sesion_edicion,id_cambio_cliente,id_usuario_actor,revision_base,
+                insert into uml_colaborativo.cambio_modelo(id,id_modelo,id_sesion_edicion,id_cambio_cliente,id_usuario_actor,revision_base,
                 revision_aplicada,tipo_operacion,tipo_entidad,id_entidad,parche,estado,aplicado_en)
-                values(:modelo,:sesion,:cliente,:actor,:base,:revision,:tipo,:entidad,:id,cast(:parche as jsonb),'APLICADO',clock_timestamp())
+                values(:cambio,:modelo,:sesion,:cliente,:actor,:base,:revision,:tipo,:entidad,:id,cast(:parche as jsonb),'APLICADO',clock_timestamp())
                 """,
                 new MapSqlParameterSource()
+                        .addValue("cambio", cambio)
                         .addValue("modelo", modelo)
                         .addValue("sesion", sesion)
                         .addValue("cliente", cliente)
@@ -107,6 +109,7 @@ public class ModeloRepositorio {
                         .addValue("entidad", entidad)
                         .addValue("id", id)
                         .addValue("parche", parche));
+        return cambio;
     }
 
     public Optional<Confirmacion> repeticion(

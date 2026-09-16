@@ -45,8 +45,8 @@ public class VerificarPersistencia implements ApplicationRunner {
                             + " is not null",
                         Boolean.class);
         if (!Integer.valueOf(48).equals(tablas)
-                || !Integer.valueOf(507).equals(columnas)
-                || !Integer.valueOf(119).equals(fks)
+                || !Integer.valueOf(509).equals(columnas)
+                || !Integer.valueOf(120).equals(fks)
                 || !Boolean.TRUE.equals(funciones))
             throw new IllegalStateException(
                     "La persistencia no coincide con el contrato vigente; no se modificó el"

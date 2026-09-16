@@ -43,6 +43,57 @@ public class ElementoRepositorio {
         }
     }
 
+    /** Reactiva solo el elemento objetivo de una propuesta aceptada explícitamente. */
+    public boolean restaurarSiEliminado(UUID modelo, UUID actor, Accion a) {
+        if (!Set.of("ACTUALIZAR", "MOVER").contains(a.operacion())) return false;
+        var p =
+                new MapSqlParameterSource()
+                        .addValue("modelo", modelo)
+                        .addValue("actor", actor)
+                        .addValue("id", a.idEntidad());
+        int restaurados =
+                switch (a.entidad()) {
+                    case "CLASE" ->
+                            jdbc.update(
+                                    "update uml_colaborativo.clase_uml set"
+                                        + " eliminado_en=null,actualizado_por=:actor where id=:id"
+                                        + " and id_modelo=:modelo and eliminado_en is not null",
+                                    p);
+                    case "ATRIBUTO" ->
+                            jdbc.update(
+                                    "update uml_colaborativo.atributo_uml a set eliminado_en=null"
+                                        + " from uml_colaborativo.clase_uml c where a.id=:id and"
+                                        + " a.id_clase=c.id and c.id_modelo=:modelo and"
+                                        + " c.eliminado_en is null and a.eliminado_en is not null",
+                                    p);
+                    case "OPERACION" ->
+                            jdbc.update(
+                                    "update uml_colaborativo.operacion_uml o set eliminado_en=null"
+                                        + " from uml_colaborativo.clase_uml c where o.id=:id and"
+                                        + " o.id_clase=c.id and c.id_modelo=:modelo and"
+                                        + " c.eliminado_en is null and o.eliminado_en is not null",
+                                    p);
+                    case "RELACION" ->
+                            jdbc.update(
+                                    "update uml_colaborativo.relacion_uml r set"
+                                        + " eliminado_en=null,actualizado_por=:actor from"
+                                        + " uml_colaborativo.clase_uml o,uml_colaborativo.clase_uml"
+                                        + " d where r.id=:id and r.id_modelo=:modelo and"
+                                        + " r.eliminado_en is not null and o.id=r.id_clase_origen"
+                                        + " and d.id=r.id_clase_destino and o.eliminado_en is null"
+                                        + " and d.eliminado_en is null",
+                                    p);
+                    case "PAQUETE" ->
+                            jdbc.update(
+                                    "update uml_colaborativo.paquete_uml set"
+                                        + " eliminado_en=null,actualizado_por=:actor where id=:id"
+                                        + " and id_modelo=:modelo and eliminado_en is not null",
+                                    p);
+                    default -> 0;
+                };
+        return restaurados == 1;
+    }
+
     private void clase(Accion a, MapSqlParameterSource p) {
         JsonNode d = a.datos();
         switch (a.operacion()) {

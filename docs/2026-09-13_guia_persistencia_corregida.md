@@ -6,6 +6,8 @@ Fecha: 2026-09-13. Estado: migración aplicada y comprobada en `uml-collab-postg
 
 Se conservaron las 48 tablas, 507 columnas y 119 claves foráneas, con nombres de dominio en español. No se recreó el contenedor, no se eliminó el volumen y las cantidades exactas de registros de las 48 tablas coinciden antes/después. Continúan los 109 registros iniciales de catálogo; no se dejaron usuarios/proyectos ficticios en la instalación real.
 
+**Extensión del incremento 05 pendiente de despliegue personal:** `core/docs/migraciones/2026-09-15_02_resolucion_conflictos.sql` fue validada únicamente en bases aisladas. Añade trazabilidad e idempotencia a `conflicto_edicion`; después de aplicarla el esquema conserva 48 tablas y pasa a 509 columnas y 120 claves foráneas. Mientras no se autorice y ejecute en la instalación del puerto 55432, los conteos del párrafo anterior siguen describiendo esa base personal y el backend 0.5 no debe iniciarse contra ella.
+
 | Parámetro | Valor vigente |
 |---|---|
 | Servidor | localhost |
@@ -70,6 +72,10 @@ Los flags `estado_validacion`/`estado=VALIDO` son resultados declarados por work
 `version_fila` se incrementa mediante trigger. Si se usa JPA `@Version`, alinear el valor y verificar sus actualizaciones condicionadas; evitar escrituras masivas que sobrescriban versiones o entidades almacenadas en memoria después de una cascada.
 
 ## Conflictos, borrado y restauración
+
+El incremento 05 registra primero la propuesta incompatible como `cambio_modelo` con estado `CONFLICTO`, después de que la edición que encontró SQLSTATE `40001` haya revertido. La resolución vuelve a comprobar proyecto, permisos, sesión y revisión bajo bloqueo. Solo una aplicación o fusión que modifique el UML abre el contexto `iniciar_edicion_modelo`, aplica cambios, registra el cambio resolutor y llama `guardar_version_modelo`; conservar o descartar no fabrica una versión. Todas las opciones finalizan el conflicto y registran actividad en la misma transacción. Los avisos WebSocket se publican `AFTER_COMMIT`.
+
+La fusión automática queda limitada a propiedades disjuntas demostrables. Un elemento eliminado solo puede reactivarse si sus dependencias siguen activas. Cualquier error UML nuevo o carrera durante la decisión rechaza la operación y conserva el conflicto abierto. Los campos `id_solicitud_resolucion` e `id_cambio_resolucion` de la migración 05 permiten reconocer reintentos y enlazar la decisión con el cambio confirmado.
 
 - `40001` por revisión obsoleta: revertir TODO el cambio y devolver conflicto al cliente (habitualmente HTTP 409). No sustituir su base por la revisión actual para sobrescribir automáticamente. Si era un reenvío, comprobar el UUID ya confirmado tras revertir.
 - `40001` por colisión administrativa del catálogo: releer y revalidar antes de reintentar la transacción. `40P01`/timeouts también requieren rollback; no ignorarlos.

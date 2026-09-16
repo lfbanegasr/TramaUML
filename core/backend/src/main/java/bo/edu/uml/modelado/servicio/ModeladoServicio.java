@@ -1,6 +1,7 @@
 package bo.edu.uml.modelado.servicio;
 
 import bo.edu.uml.acceso.modelo.Identidad;
+import bo.edu.uml.colaboracion.servicio.ConflictoServicio;
 import bo.edu.uml.compartido.*;
 import bo.edu.uml.modelado.dto.ModeladoDto.*;
 
@@ -17,10 +18,13 @@ import java.util.UUID;
 public class ModeladoServicio {
     private final EdicionTransaccional edicion;
     private final ObjectMapper json;
+    private final ConflictoServicio conflictos;
 
-    public ModeladoServicio(EdicionTransaccional edicion, ObjectMapper json) {
+    public ModeladoServicio(
+            EdicionTransaccional edicion, ObjectMapper json, ConflictoServicio conflictos) {
         this.edicion = edicion;
         this.json = json;
+        this.conflictos = conflictos;
     }
 
     public Modelo leer(Identidad actor, UUID modelo) {
@@ -42,7 +46,14 @@ public class ModeladoServicio {
             if (java.util.Set.of("40001", "23505").contains(ErroresApi.sqlState(e))) {
                 var previo = edicion.recuperarReenvio(actor, modelo, cambio, parche);
                 if (previo.isPresent()) return previo.get();
-                if ("40001".equals(ErroresApi.sqlState(e))) throw ApiException.conflicto();
+                if ("40001".equals(ErroresApi.sqlState(e))) {
+                    UUID idConflicto = conflictos.registrar(actor, modelo, cambio, parche);
+                    throw new ApiException(
+                            409,
+                            "El modelo cambió y la propuesta se conservó como conflicto "
+                                    + idConflicto
+                                    + ". Revisa las diferencias antes de decidir.");
+                }
             }
             throw e;
         }

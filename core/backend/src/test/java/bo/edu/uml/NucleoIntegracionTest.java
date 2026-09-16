@@ -1,6 +1,7 @@
 package bo.edu.uml;
 
 import static org.assertj.core.api.Assertions.*;
+import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -19,6 +20,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.*;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
@@ -44,6 +46,7 @@ class NucleoIntegracionTest {
     @Autowired InicializarAdministrador inicializar;
     @Autowired AccesoRepositorio acceso;
     @Autowired bo.edu.uml.colaboracion.servicio.ColaboracionServicio colaboracion;
+    @MockitoSpyBean bo.edu.uml.colaboracion.controlador.ColaboracionWebSocketHandler canal;
     private String usuario, clave;
     private UUID admin;
     private final Map<String, UUID> sesionesEdicion = new ConcurrentHashMap<>();
@@ -2245,5 +2248,503 @@ class NucleoIntegracionTest {
                 .andExpect(status().isOk());
         escribir(a, post("/api/proyectos/" + p.get("id").asText() + "/archivar"), transicion(p))
                 .andExpect(status().isOk());
+    }
+
+    private record EscenarioConflicto(
+            Cliente propietario,
+            Cliente editor,
+            UUID usuarioEditor,
+            UUID miembroEditor,
+            UUID proyecto,
+            UUID modelo,
+            UUID sesionEditor,
+            UUID clase,
+            UUID conflicto,
+            long revision) {}
+
+    private Map<String, Object> datosClase(String nombre, String descripcion) {
+        Map<String, Object> datos = new HashMap<>();
+        datos.put("nombre", nombre);
+        if (descripcion != null) datos.put("descripcion", descripcion);
+        datos.put("visibilidad", "PUBLICO");
+        datos.put("esAbstracto", false);
+        datos.put("esPersistente", false);
+        return datos;
+    }
+
+    private Map<String, Object> actualizarClase(UUID clase, String nombre, String descripcion) {
+        return Map.of(
+                "operacion",
+                "ACTUALIZAR",
+                "entidad",
+                "CLASE",
+                "idEntidad",
+                clase,
+                "datos",
+                datosClase(nombre, descripcion));
+    }
+
+    private EscenarioConflicto conflictoClase(
+            String nombreConfirmado,
+            String descripcionConfirmada,
+            String nombrePropuesto,
+            String descripcionPropuesta)
+            throws Exception {
+        Cliente propietario = login(usuario, clave);
+        JsonNode proyecto = proyecto(propietario);
+        UUID idProyecto = UUID.fromString(proyecto.get("id").asText());
+        UUID modelo = UUID.fromString(proyecto.get("idModelo").asText());
+        UUID clase = UUID.randomUUID();
+        UUID sesionPropietario = asegurarSesion(propietario, modelo.toString());
+        var crear = new HashMap<>(clase(clase, "BaseConflicto"));
+        var datosCreacion = new HashMap<>(datosClase("BaseConflicto", null));
+        datosCreacion.put("x", 0);
+        datosCreacion.put("y", 0);
+        crear.put("datos", datosCreacion);
+        enviar(propietario, modelo.toString(), cambio(1, UUID.randomUUID(), crear))
+                .andExpect(status().isOk());
+
+        String nombre = "conflicto_" + UUID.randomUUID().toString().substring(0, 8);
+        UUID usuarioEditor = fixture(nombre);
+        UUID miembroEditor = miembroFixture(idProyecto, usuarioEditor, "EDITOR_PROYECTO");
+        Cliente editor = login(nombre, clave);
+        UUID sesionEditor = asegurarSesion(editor, modelo.toString());
+        assertThat(sesionEditor).isEqualTo(sesionPropietario);
+        long base =
+                respuesta(
+                                mvc.perform(get("/api/modelos/" + modelo).cookie(editor.sesion()))
+                                        .andExpect(status().isOk()))
+                        .get("revision")
+                        .asLong();
+        enviar(
+                        propietario,
+                        modelo.toString(),
+                        cambio(
+                                base,
+                                UUID.randomUUID(),
+                                actualizarClase(clase, nombreConfirmado, descripcionConfirmada)))
+                .andExpect(status().isOk());
+        enviar(
+                        editor,
+                        modelo.toString(),
+                        cambio(
+                                base,
+                                UUID.randomUUID(),
+                                actualizarClase(clase, nombrePropuesto, descripcionPropuesta)))
+                .andExpect(status().isConflict())
+                .andExpect(
+                        jsonPath("$.mensaje")
+                                .value(org.hamcrest.Matchers.containsString("se conservó")));
+        JsonNode lista =
+                respuesta(
+                        mvc.perform(
+                                        get("/api/modelos/" + modelo + "/conflictos")
+                                                .cookie(editor.sesion()))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.total").value(1)));
+        JsonNode conflicto = lista.get("conflictos").get(0);
+        return new EscenarioConflicto(
+                propietario,
+                editor,
+                usuarioEditor,
+                miembroEditor,
+                idProyecto,
+                modelo,
+                sesionEditor,
+                clase,
+                UUID.fromString(conflicto.get("id").asText()),
+                conflicto.get("revisionActual").asLong());
+    }
+
+    private Map<String, Object> resolver(
+            EscenarioConflicto e, UUID solicitud, long revision, String tipo) {
+        return Map.of(
+                "idSesionEdicion", e.sesionEditor(),
+                "idSolicitudResolucion", solicitud,
+                "revisionEsperada", revision,
+                "tipoResolucion", tipo,
+                "confirmar", true);
+    }
+
+    @Test
+    void conflictoMismaPropiedadExponeAutoresValoresYPermiteConservar() throws Exception {
+        EscenarioConflicto e = conflictoClase("Confirmada", null, "Propuesta", null);
+        JsonNode detalle =
+                respuesta(
+                        mvc.perform(
+                                        get("/api/modelos/"
+                                                        + e.modelo()
+                                                        + "/conflictos/"
+                                                        + e.conflicto())
+                                                .cookie(e.editor().sesion()))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.diferencias.length()").value(1))
+                                .andExpect(
+                                        jsonPath("$.diferencias[?(@.propiedad == 'nombre')]")
+                                                .exists())
+                                .andExpect(
+                                        jsonPath("$.diferencias[?(@.incompatible == true)]")
+                                                .exists())
+                                .andExpect(jsonPath("$.cambioEntrante.autor.nombre").exists())
+                                .andExpect(jsonPath("$.cambioEntrante.creadoEn").exists()));
+        assertThat(detalle.get("fusionable").asBoolean()).isFalse();
+        clearInvocations(canal);
+        UUID solicitud = UUID.randomUUID();
+        JsonNode resultado =
+                respuesta(
+                        escribir(
+                                        e.editor(),
+                                        post(
+                                                "/api/modelos/"
+                                                        + e.modelo()
+                                                        + "/conflictos/"
+                                                        + e.conflicto()
+                                                        + "/resoluciones"),
+                                        resolver(
+                                                e, solicitud, e.revision(), "CONSERVAR_ALMACENADO"))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.conflicto.estado").value("RESUELTO"))
+                                .andExpect(jsonPath("$.revision").doesNotExist()));
+        assertThat(resultado.get("repetido").asBoolean()).isFalse();
+        assertThat(
+                        jdbc.queryForObject(
+                                "select nombre from uml_colaborativo.clase_uml where id=?",
+                                String.class,
+                                e.clase()))
+                .isEqualTo("Confirmada");
+        verify(canal, atLeastOnce())
+                .publicarConflicto(
+                        argThat(
+                                c ->
+                                        c.conflicto().equals(e.conflicto())
+                                                && c.estado().equals("RESUELTO")));
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from uml_colaborativo.actividad_proyecto where"
+                                        + " id_proyecto=? and accion='RESOLVER_CONFLICTO'",
+                                Long.class,
+                                e.proyecto()))
+                .isEqualTo(1);
+    }
+
+    @Test
+    void propiedadesCompatiblesSeFusionanEIdempotenciaNoCreaOtraVersion() throws Exception {
+        EscenarioConflicto e = conflictoClase("Confirmada", null, "BaseConflicto", "Entrante");
+        mvc.perform(get("/api/modelos/" + e.modelo() + "/conflictos").cookie(e.editor().sesion()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.conflictos[0].fusionable").value(true));
+        UUID solicitud = UUID.randomUUID();
+        Map<String, Object> cuerpo = resolver(e, solicitud, e.revision(), "FUSIONAR");
+        JsonNode primera =
+                respuesta(
+                        escribir(
+                                        e.editor(),
+                                        post(
+                                                "/api/modelos/"
+                                                        + e.modelo()
+                                                        + "/conflictos/"
+                                                        + e.conflicto()
+                                                        + "/resoluciones"),
+                                        cuerpo)
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.revision").value(e.revision() + 1)));
+        JsonNode repetida =
+                respuesta(
+                        escribir(
+                                        e.editor(),
+                                        post(
+                                                "/api/modelos/"
+                                                        + e.modelo()
+                                                        + "/conflictos/"
+                                                        + e.conflicto()
+                                                        + "/resoluciones"),
+                                        cuerpo)
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.repetido").value(true)));
+        assertThat(repetida.get("idVersion")).isEqualTo(primera.get("idVersion"));
+        Map<String, Object> clase =
+                jdbc.queryForMap(
+                        "select nombre,descripcion from uml_colaborativo.clase_uml where id=?",
+                        e.clase());
+        assertThat(clase)
+                .containsEntry("nombre", "Confirmada")
+                .containsEntry("descripcion", "Entrante");
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from uml_colaborativo.cambio_modelo where"
+                                        + " id_modelo=? and id_cambio_cliente=?",
+                                Long.class,
+                                e.modelo(),
+                                solicitud))
+                .isEqualTo(1);
+    }
+
+    @Test
+    void aplicarEntranteRestauraElementoEliminadoYFusionInvalidaNoModifica() throws Exception {
+        EscenarioConflicto invalido = conflictoClase("Confirmada", null, "Propuesta", null);
+        escribir(
+                        invalido.editor(),
+                        post(
+                                "/api/modelos/"
+                                        + invalido.modelo()
+                                        + "/conflictos/"
+                                        + invalido.conflicto()
+                                        + "/resoluciones"),
+                        resolver(invalido, UUID.randomUUID(), invalido.revision(), "FUSIONAR"))
+                .andExpect(status().isUnprocessableEntity());
+        assertThat(
+                        jdbc.queryForObject(
+                                "select estado from uml_colaborativo.conflicto_edicion where id=?",
+                                String.class,
+                                invalido.conflicto()))
+                .isEqualTo("ABIERTO");
+        escribir(
+                        invalido.editor(),
+                        post(
+                                "/api/modelos/"
+                                        + invalido.modelo()
+                                        + "/conflictos/"
+                                        + invalido.conflicto()
+                                        + "/descartes"),
+                        Map.of(
+                                "idSesionEdicion", invalido.sesionEditor(),
+                                "idSolicitudResolucion", UUID.randomUUID(),
+                                "revisionEsperada", invalido.revision(),
+                                "confirmar", true))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.conflicto.estado").value("DESCARTADO"));
+
+        EscenarioConflicto eliminado = conflictoClase("Temporal", null, "Reactivada", null);
+        // La modificación confirmada del escenario se convierte en eliminación antes de revisar.
+        enviar(
+                        eliminado.propietario(),
+                        eliminado.modelo().toString(),
+                        cambio(
+                                eliminado.revision(),
+                                UUID.randomUUID(),
+                                Map.of(
+                                        "operacion",
+                                        "ELIMINAR",
+                                        "entidad",
+                                        "CLASE",
+                                        "idEntidad",
+                                        eliminado.clase())))
+                .andExpect(status().isOk());
+        long revision = eliminado.revision() + 1;
+        mvc.perform(
+                        get("/api/modelos/"
+                                        + eliminado.modelo()
+                                        + "/conflictos/"
+                                        + eliminado.conflicto())
+                                .cookie(eliminado.editor().sesion()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.elementoEliminado").value(true));
+        escribir(
+                        eliminado.editor(),
+                        post(
+                                "/api/modelos/"
+                                        + eliminado.modelo()
+                                        + "/conflictos/"
+                                        + eliminado.conflicto()
+                                        + "/resoluciones"),
+                        resolver(eliminado, UUID.randomUUID(), revision, "APLICAR_ENTRANTE"))
+                .andExpect(status().isOk());
+        assertThat(
+                        jdbc.queryForObject(
+                                "select nombre from uml_colaborativo.clase_uml where id=? and"
+                                        + " eliminado_en is null",
+                                String.class,
+                                eliminado.clase()))
+                .isEqualTo("Reactivada");
+    }
+
+    @Test
+    void lectorConsultaPeroNoResuelveYPerdidaDePermisoSeRevalida() throws Exception {
+        EscenarioConflicto e = conflictoClase("Confirmada", null, "Propuesta", null);
+        String nombre = "lector_conf_" + UUID.randomUUID().toString().substring(0, 8);
+        UUID lectorId = fixture(nombre);
+        miembroFixture(e.proyecto(), lectorId, "LECTOR_PROYECTO");
+        Cliente lector = login(nombre, clave);
+        UUID sesionLector = asegurarSesion(lector, e.modelo().toString());
+        mvc.perform(get("/api/modelos/" + e.modelo() + "/conflictos").cookie(lector.sesion()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.puedeResolver").value(false))
+                .andExpect(jsonPath("$.conflictos[0].diferencias").isArray());
+        escribir(
+                        lector,
+                        post(
+                                "/api/modelos/"
+                                        + e.modelo()
+                                        + "/conflictos/"
+                                        + e.conflicto()
+                                        + "/resoluciones"),
+                        Map.of(
+                                "idSesionEdicion",
+                                sesionLector,
+                                "idSolicitudResolucion",
+                                UUID.randomUUID(),
+                                "revisionEsperada",
+                                e.revision(),
+                                "tipoResolucion",
+                                "CONSERVAR_ALMACENADO",
+                                "confirmar",
+                                true))
+                .andExpect(status().isForbidden());
+
+        jdbc.update(
+                "insert into"
+                    + " uml_colaborativo.permiso_miembro_proyecto(id_miembro_proyecto,id_permiso,decision)"
+                    + " values(?,?,'DENEGAR')",
+                e.miembroEditor(),
+                permiso("RESOLVER_CONFLICTO"));
+        escribir(
+                        e.editor(),
+                        post(
+                                "/api/modelos/"
+                                        + e.modelo()
+                                        + "/conflictos/"
+                                        + e.conflicto()
+                                        + "/resoluciones"),
+                        resolver(e, UUID.randomUUID(), e.revision(), "CONSERVAR_ALMACENADO"))
+                .andExpect(status().isForbidden());
+        assertThat(
+                        jdbc.queryForObject(
+                                "select estado from uml_colaborativo.conflicto_edicion where id=?",
+                                String.class,
+                                e.conflicto()))
+                .isEqualTo("ABIERTO");
+    }
+
+    @Test
+    void nuevaRevisionYDesconexionImpidenDecidirHastaActualizar() throws Exception {
+        EscenarioConflicto e = conflictoClase("Confirmada", null, "Propuesta", null);
+        enviar(
+                        e.propietario(),
+                        e.modelo().toString(),
+                        cambio(
+                                e.revision(),
+                                UUID.randomUUID(),
+                                clase(UUID.randomUUID(), "CambioPosterior")))
+                .andExpect(status().isOk());
+        escribir(
+                        e.editor(),
+                        post(
+                                "/api/modelos/"
+                                        + e.modelo()
+                                        + "/conflictos/"
+                                        + e.conflicto()
+                                        + "/resoluciones"),
+                        resolver(e, UUID.randomUUID(), e.revision(), "CONSERVAR_ALMACENADO"))
+                .andExpect(status().isConflict());
+        long vigente = e.revision() + 1;
+        escribir(
+                        e.editor(),
+                        delete("/api/modelos/" + e.modelo() + "/sesiones/" + e.sesionEditor()),
+                        Map.of())
+                .andExpect(status().isOk());
+        escribir(
+                        e.editor(),
+                        post(
+                                "/api/modelos/"
+                                        + e.modelo()
+                                        + "/conflictos/"
+                                        + e.conflicto()
+                                        + "/resoluciones"),
+                        resolver(e, UUID.randomUUID(), vigente, "CONSERVAR_ALMACENADO"))
+                .andExpect(status().isConflict());
+        var reabierta =
+                respuesta(
+                        escribir(
+                                        e.editor(),
+                                        post("/api/modelos/" + e.modelo() + "/sesiones"),
+                                        Map.of("idSolicitudCliente", UUID.randomUUID()))
+                                .andExpect(status().isCreated()));
+        UUID sesion = UUID.fromString(reabierta.get("id").asText());
+        colaboracion.conectar(acceso.identidad(e.usuarioEditor()), e.modelo(), sesion);
+        Map<String, Object> recuperada =
+                new HashMap<>(resolver(e, UUID.randomUUID(), vigente, "CONSERVAR_ALMACENADO"));
+        recuperada.put("idSesionEdicion", sesion);
+        escribir(
+                        e.editor(),
+                        post(
+                                "/api/modelos/"
+                                        + e.modelo()
+                                        + "/conflictos/"
+                                        + e.conflicto()
+                                        + "/resoluciones"),
+                        recuperada)
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void falloAlAplicarRevierteRevisionConflictoActividadYNotificacion() throws Exception {
+        Cliente propietario = login(usuario, clave);
+        JsonNode p = proyecto(propietario);
+        UUID proyecto = UUID.fromString(p.get("id").asText());
+        UUID modelo = UUID.fromString(p.get("idModelo").asText());
+        UUID primera = UUID.randomUUID(), segunda = UUID.randomUUID();
+        enviar(propietario, modelo.toString(), cambio(1, UUID.randomUUID(), clase(primera, "Uno")))
+                .andExpect(status().isOk());
+        enviar(
+                        propietario,
+                        modelo.toString(),
+                        cambio(2, UUID.randomUUID(), clase(segunda, "Duplicado")))
+                .andExpect(status().isOk());
+        String nombre = "rollback_conf_" + UUID.randomUUID().toString().substring(0, 8);
+        UUID editorId = fixture(nombre);
+        miembroFixture(proyecto, editorId, "EDITOR_PROYECTO");
+        Cliente editor = login(nombre, clave);
+        UUID sesion = asegurarSesion(editor, modelo.toString());
+        enviar(
+                        propietario,
+                        modelo.toString(),
+                        cambio(3, UUID.randomUUID(), actualizarClase(primera, "Uno", "Confirmado")))
+                .andExpect(status().isOk());
+        enviar(
+                        editor,
+                        modelo.toString(),
+                        cambio(3, UUID.randomUUID(), actualizarClase(primera, "Duplicado", null)))
+                .andExpect(status().isConflict());
+        JsonNode conflicto =
+                respuesta(
+                                mvc.perform(
+                                                get("/api/modelos/" + modelo + "/conflictos")
+                                                        .cookie(editor.sesion()))
+                                        .andExpect(status().isOk()))
+                        .get("conflictos")
+                        .get(0);
+        UUID id = UUID.fromString(conflicto.get("id").asText());
+        long actividadAntes = actividad(proyecto.toString());
+        clearInvocations(canal);
+        escribir(
+                        editor,
+                        post("/api/modelos/" + modelo + "/conflictos/" + id + "/resoluciones"),
+                        Map.of(
+                                "idSesionEdicion",
+                                sesion,
+                                "idSolicitudResolucion",
+                                UUID.randomUUID(),
+                                "revisionEsperada",
+                                4,
+                                "tipoResolucion",
+                                "APLICAR_ENTRANTE",
+                                "confirmar",
+                                true))
+                .andExpect(status().isConflict());
+        assertThat(
+                        jdbc.queryForObject(
+                                "select revision_actual from uml_colaborativo.modelo_uml where"
+                                        + " id=?",
+                                Long.class,
+                                modelo))
+                .isEqualTo(4);
+        assertThat(
+                        jdbc.queryForObject(
+                                "select estado from uml_colaborativo.conflicto_edicion where id=?",
+                                String.class,
+                                id))
+                .isEqualTo("ABIERTO");
+        assertThat(actividad(proyecto.toString())).isEqualTo(actividadAntes);
+        verify(canal, never()).publicarConflicto(any());
     }
 }

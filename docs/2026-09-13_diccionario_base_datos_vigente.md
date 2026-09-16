@@ -4,6 +4,8 @@ Derivado automáticamente de los metadatos del contenedor `uml-collab-postgresql
 
 Esquema `uml_colaborativo`: 48 tablas, 507 columnas y 127 índices (incluidos PK/UQ). Las tablas, columnas y relaciones conservan sus nombres españoles. Para instalación e integración consultar [la guía vigente](<D:/1 Universidad/1SEMESTRE-2-2026/04_INGENIERIA_SOFTWARE_I/Primer parcial/Implementacion/docs/2026-09-13_guia_persistencia_corregida.md>).
 
+La extracción de este documento sigue representando la base personal antes del incremento 05. La migración incremental `core/docs/migraciones/2026-09-15_02_resolucion_conflictos.sql`, todavía no aplicada al puerto 55432, fue verificada en bases aisladas y lleva el esquema a 48 tablas, 509 columnas y 120 FK. Su delta se documenta junto a `CONFLICTO_EDICION` para no presentar como desplegado un cambio pendiente.
+
 Los nombres de tipos SQL y operadores son vocabulario técnico PostgreSQL. `NULL` como máximo de multiplicidad UML representa ausencia de límite, no un máximo admisible para un identificador. Los triggers y las funciones se explican en la guía; esta lista documenta columnas, restricciones e índices físicos.
 
 ## ACTIVIDAD_PROYECTO
@@ -379,6 +381,17 @@ Restricciones y relaciones:
 
 - `ix_conflicto_edicion_01`: `CREATE INDEX ix_conflicto_edicion_01 ON uml_colaborativo.conflicto_edicion USING btree (id_modelo, detectado_en DESC) WHERE ((estado)::text = 'ABIERTO'::text)`.
 - `pk_conflicto_edicion_01`: `CREATE UNIQUE INDEX pk_conflicto_edicion_01 ON uml_colaborativo.conflicto_edicion USING btree (id)`.
+
+Delta del incremento 05, pendiente en la base personal:
+
+- `id_solicitud_resolucion uuid NULL`: UUID idempotente de la decisión humana.
+- `id_cambio_resolucion uuid NULL`: cambio confirmado creado al aplicar o fusionar.
+- `ck_conflicto_edicion_04`: exige fecha de resolución en `RESUELTO` y `DESCARTADO`, y ausencia en `ABIERTO`.
+- `ck_conflicto_edicion_05`: una solicitud de resolución solo existe en un conflicto finalizado con resolutor.
+- `ck_conflicto_edicion_06`: un cambio resolutor solo existe para `APLICAR_ENTRANTE` o `FUSIONAR` resueltos.
+- `fk_conflicto_edicion_07`: `(id_cambio_resolucion, id_modelo)` referencia `cambio_modelo(id, id_modelo)`.
+- `uq_conflicto_edicion_01`: UUID de resolución único cuando no es nulo.
+- `uq_conflicto_edicion_02`: un único conflicto abierto por cambio entrante.
 
 ## DEPENDENCIA_BACKEND
 

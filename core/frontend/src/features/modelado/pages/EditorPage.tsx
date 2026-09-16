@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -16,6 +16,8 @@ import { RelacionEdge, type RelacionArista } from '../components/RelacionEdge';
 import { FormularioElemento, type Borrador } from '../components/FormularioElemento';
 import { simbolo, multiplicidad, type Accion } from '../api/modeladoApi';
 import { InformeValidacion } from '../../validacion/components/InformeValidacion';
+import { ConflictosPanel } from '../../colaboracion/components/ConflictosPanel';
+import { listarConflictos } from '../../colaboracion/api/conflictosApi';
 const nodeTypes = { clase: ClaseNode },
   edgeTypes = { uml: RelacionEdge };
 export function EditorPage({
@@ -34,11 +36,25 @@ export function EditorPage({
     [seleccion, setSeleccion] = useState<string | null>(null);
   const [borrador, setBorrador] = useState<Borrador | null>(null);
   const [informe, setInforme] = useState(false);
+  const [mostrarConflictos, setMostrarConflictos] = useState(false);
+  const [totalConflictos, setTotalConflictos] = useState(0);
+  const cambiarTotalConflictos = useCallback((total: number) => setTotalConflictos(total), []);
   const flujo = useRef<ReactFlowInstance<ClaseNodo, RelacionArista> | null>(null);
   const finalizarRef = useRef(m.salir),
     enfocarRef = useRef(m.enfocar);
   finalizarRef.current = m.salir;
   enfocarRef.current = m.enfocar;
+  useEffect(() => {
+    let activo = true;
+    listarConflictos(proyecto.idModelo)
+      .then((lista) => {
+        if (activo) setTotalConflictos(lista.total);
+      })
+      .catch(() => undefined);
+    return () => {
+      activo = false;
+    };
+  }, [proyecto.idModelo, m.senalConflictos]);
   useEffect(() => {
     if (m.modelo)
       setNodes(
@@ -196,6 +212,12 @@ export function EditorPage({
       <div className="editor-toolbar">
         <span>◇ {m.modelo.nombre}</span>
         <div>
+          <button
+            className={totalConflictos ? 'conflict-indicator pending' : 'conflict-indicator'}
+            onClick={() => setMostrarConflictos(true)}
+          >
+            Conflictos {totalConflictos ? '(' + totalConflictos + ')' : ''}
+          </button>
           <button onClick={() => setInforme((v) => !v)}>Informe de validación</button>
           {puedeOrganizar && (
             <button
@@ -282,6 +304,17 @@ export function EditorPage({
               duration: 300,
             });
           }}
+        />
+      )}
+      {mostrarConflictos && (
+        <ConflictosPanel
+          modelo={m.modelo.id}
+          sesion={m.sesion?.id ?? null}
+          conectado={m.colaboracion === 'CONECTADO'}
+          senal={m.senalConflictos}
+          cerrar={() => setMostrarConflictos(false)}
+          cambiarTotal={cambiarTotalConflictos}
+          resuelto={m.recargar}
         />
       )}
       <div className="editor-body">

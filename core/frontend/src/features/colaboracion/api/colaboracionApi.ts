@@ -21,11 +21,13 @@ export type SesionColaborativa = {
 };
 
 export type EventoColaborativo = {
-  tipo: 'CONECTADO' | 'PRESENCIA' | 'MODELO_CONFIRMADO' | 'ERROR';
+  tipo: 'CONECTADO' | 'PRESENCIA' | 'MODELO_CONFIRMADO' | 'CONFLICTO_ACTUALIZADO' | 'ERROR';
   datos: Record<string, unknown> & {
     sesion?: SesionColaborativa | string;
     revision?: number;
     cambio?: string;
+    conflicto?: string;
+    estado?: string;
     actor?: string;
     mensaje?: string;
   };

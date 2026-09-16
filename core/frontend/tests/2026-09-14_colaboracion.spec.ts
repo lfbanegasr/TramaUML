@@ -150,3 +150,139 @@ test('dos integrantes comparten presencia, foco y cambios confirmados; perder ed
     await contexto.close();
   }
 });
+
+test('dos sesiones comparan y resuelven una modificación concurrente sin sobrescritura silenciosa', async ({
+  page,
+  browser,
+}) => {
+  const proyecto = await crearProyecto(page);
+  const nombre = 'conflicto_' + crypto.randomUUID().slice(0, 8);
+  const cuenta = await crearCuenta(page, nombre);
+  const equipo = await (
+    await page.request.get('/api/proyectos/' + proyecto.id + '/miembros')
+  ).json();
+  const rolEditor = equipo.roles.find((r: { codigo: string }) => r.codigo === 'EDITOR_PROYECTO');
+  expect(rolEditor?.id).toBeTruthy();
+  expect(
+    (
+      await escribir(page.request, '/proyectos/' + proyecto.id + '/miembros', {
+        usuario: cuenta.id,
+        rol: rolEditor.id,
+        estado: 'ACTIVO',
+        motivo: '',
+        permisos: [],
+      })
+    ).status(),
+  ).toBe(201);
+
+  const contexto = await browser.newContext({ baseURL: process.env.UML_E2E_URL });
+  try {
+    const colaborador = await contexto.newPage();
+    await entrar(colaborador, nombre, cuenta.clave);
+    await colaborador
+      .locator('.project-card')
+      .filter({ hasText: proyecto.nombre })
+      .getByRole('button', { name: /Abrir modelo/ })
+      .click();
+    await expect(colaborador.getByText('Colaboración conectada')).toBeVisible();
+
+    const idClase = crypto.randomUUID();
+    const modeloInicial = await (
+      await page.request.get('/api/modelos/' + proyecto.idModelo)
+    ).json();
+    const sesionAdministrador = await (
+      await escribir(page.request, '/modelos/' + proyecto.idModelo + '/sesiones', {
+        idSolicitudCliente: crypto.randomUUID(),
+      })
+    ).json();
+    const crear = await escribir(page.request, '/modelos/' + proyecto.idModelo + '/cambios', {
+      idSesionEdicion: sesionAdministrador.id,
+      idCambioCliente: crypto.randomUUID(),
+      revisionBase: modeloInicial.revision,
+      acciones: [
+        {
+          operacion: 'CREAR',
+          entidad: 'CLASE',
+          idEntidad: idClase,
+          datos: {
+            nombre: 'BaseConcurrente',
+            visibilidad: 'PUBLICO',
+            esAbstracto: false,
+            esPersistente: false,
+            x: 120,
+            y: 90,
+          },
+        },
+      ],
+    });
+    expect(crear.status()).toBe(200);
+    const revisionBase = (await crear.json()).revision as number;
+    const sesionEditor = await (
+      await escribir(colaborador.request, '/modelos/' + proyecto.idModelo + '/sesiones', {
+        idSolicitudCliente: crypto.randomUUID(),
+      })
+    ).json();
+    expect(sesionEditor.id).toBe(sesionAdministrador.id);
+
+    const datos = (nombreClase: string) => ({
+      nombre: nombreClase,
+      visibilidad: 'PUBLICO',
+      esAbstracto: false,
+      esPersistente: false,
+    });
+    expect(
+      (
+        await escribir(page.request, '/modelos/' + proyecto.idModelo + '/cambios', {
+          idSesionEdicion: sesionAdministrador.id,
+          idCambioCliente: crypto.randomUUID(),
+          revisionBase,
+          acciones: [
+            {
+              operacion: 'ACTUALIZAR',
+              entidad: 'CLASE',
+              idEntidad: idClase,
+              datos: datos('EstadoConfirmado'),
+            },
+          ],
+        })
+      ).status(),
+    ).toBe(200);
+    const propuesta = await escribir(
+      colaborador.request,
+      '/modelos/' + proyecto.idModelo + '/cambios',
+      {
+        idSesionEdicion: sesionEditor.id,
+        idCambioCliente: crypto.randomUUID(),
+        revisionBase,
+        acciones: [
+          {
+            operacion: 'ACTUALIZAR',
+            entidad: 'CLASE',
+            idEntidad: idClase,
+            datos: datos('PropuestaEntrante'),
+          },
+        ],
+      },
+    );
+    expect(propuesta.status()).toBe(409);
+
+    const indicador = page.getByRole('button', { name: 'Conflictos (1)' });
+    await expect(indicador).toBeVisible();
+    await indicador.click();
+    const dialogo = page.getByRole('dialog', { name: 'Conflictos del modelo' });
+    await expect(dialogo.getByRole('cell', { name: 'EstadoConfirmado' })).toBeVisible();
+    await expect(dialogo.getByRole('cell', { name: 'PropuestaEntrante' })).toBeVisible();
+    await expect(dialogo.getByRole('rowheader', { name: 'nombre' })).toBeVisible();
+    await dialogo.getByRole('button', { name: 'Aplicar propuesta' }).click();
+    await dialogo.getByRole('button', { name: 'Revisar confirmación' }).click();
+    await dialogo.getByRole('button', { name: 'Confirmar resolución' }).click();
+    await expect(dialogo.getByText('No hay conflictos pendientes.')).toBeVisible();
+
+    const modeloFinal = await (await page.request.get('/api/modelos/' + proyecto.idModelo)).json();
+    expect(modeloFinal.clases.find((c: { id: string }) => c.id === idClase)?.nombre).toBe(
+      'PropuestaEntrante',
+    );
+  } finally {
+    await contexto.close();
+  }
+});
