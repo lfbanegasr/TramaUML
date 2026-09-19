@@ -21,6 +21,11 @@ import { listarConflictos } from '../../colaboracion/api/conflictosApi';
 import { HistorialPage } from '../../historial/pages/HistorialPage';
 import { ExportarXmiDialog } from '../../interoperabilidad/components/ExportarXmiDialog';
 import { GenerarBackendDialog } from '../../interoperabilidad/components/GenerarBackendDialog';
+import { BotonAsistenteIa } from '../../ia/components/BotonAsistenteIa';
+import { EntradaVozModal } from '../../ia/components/EntradaVozModal';
+import { SubirFotoPizarraModal } from '../../ia/components/SubirFotoPizarraModal';
+import { RevisarPropuestaDialog } from '../../ia/components/RevisarPropuestaDialog';
+import { leerPropuesta, leerPropuestaVigente, type PropuestaIa } from '../../ia/api/iaApi';
 const nodeTypes = { clase: ClaseNode },
   edgeTypes = { uml: RelacionEdge };
 export function EditorPage({
@@ -45,6 +50,10 @@ export function EditorPage({
   const [verHistorial, setVerHistorial] = useState(false);
   const [verExportarXmi, setVerExportarXmi] = useState(false);
   const [verGenerarBackend, setVerGenerarBackend] = useState(false);
+  const [verVozIa, setVerVozIa] = useState(false);
+  const [verImagenIa, setVerImagenIa] = useState(false);
+  const [verPropuestaIa, setVerPropuestaIa] = useState(false);
+  const [propuestaIa, setPropuestaIa] = useState<PropuestaIa | null>(null);
   const flujo = useRef<ReactFlowInstance<ClaseNodo, RelacionArista> | null>(null);
   const finalizarRef = useRef(m.salir),
     enfocarRef = useRef(m.enfocar);
@@ -116,6 +125,17 @@ export function EditorPage({
     else if (m.modelo?.paquetes.some((p) => p.id === seleccion))
       enfocarRef.current('PAQUETE', seleccion);
   }, [seleccion, m.modelo?.clases, m.modelo?.relaciones, m.modelo?.paquetes]);
+  useEffect(() => {
+    let activo = true;
+    leerPropuestaVigente(proyecto.idModelo)
+      .then((propuesta) => {
+        if (activo) setPropuestaIa(propuesta ?? null);
+      })
+      .catch(() => undefined);
+    return () => {
+      activo = false;
+    };
+  }, [proyecto.idModelo, m.modelo?.revision]);
   const clase = m.modelo?.clases.find((c) => c.id === seleccion);
   const relacion = m.modelo?.relaciones.find((r) => r.id === seleccion);
   const paquete = m.modelo?.paquetes.find((p) => p.id === seleccion);
@@ -147,6 +167,11 @@ export function EditorPage({
         setSeleccion(a.idEntidad);
     }
     return ok;
+  }
+  async function abrirPropuestaGenerada(id: string) {
+    const propuesta = await leerPropuesta(proyecto.idModelo, id);
+    setPropuestaIa(propuesta);
+    setVerPropuestaIa(true);
   }
   async function reintentar() {
     const accion = m.pendiente?.acciones[0];
@@ -264,6 +289,17 @@ export function EditorPage({
           >
             Generar Backend
           </button>
+          {puedeEditar && (
+            <BotonAsistenteIa
+              modelo={m.modelo.id}
+              disabled={bloqueado || !!borrador}
+              hayPropuesta={!!propuestaIa}
+              alGenerar={abrirPropuestaGenerada}
+              abrirVoz={() => setVerVozIa(true)}
+              abrirImagen={() => setVerImagenIa(true)}
+              abrirRevision={() => setVerPropuestaIa(true)}
+            />
+          )}
           {puedeOrganizar && (
             <button
               disabled={bloqueado || !!borrador}
@@ -374,6 +410,36 @@ export function EditorPage({
           modelo={m.modelo.id}
           nombreModelo={m.modelo.nombre}
           cerrar={() => setVerGenerarBackend(false)}
+        />
+      )}
+      {verVozIa && (
+        <EntradaVozModal
+          modelo={m.modelo.id}
+          cerrar={() => setVerVozIa(false)}
+          alGenerar={abrirPropuestaGenerada}
+        />
+      )}
+      {verImagenIa && (
+        <SubirFotoPizarraModal
+          modelo={m.modelo.id}
+          cerrar={() => setVerImagenIa(false)}
+          alGenerar={abrirPropuestaGenerada}
+        />
+      )}
+      {verPropuestaIa && propuestaIa && (
+        <RevisarPropuestaDialog
+          modelo={m.modelo.id}
+          propuesta={propuestaIa}
+          cerrar={() => setVerPropuestaIa(false)}
+          alAplicar={async () => {
+            setVerPropuestaIa(false);
+            setPropuestaIa(null);
+            await m.recargar();
+          }}
+          alRechazar={async () => {
+            setVerPropuestaIa(false);
+            setPropuestaIa((await leerPropuestaVigente(m.modelo!.id)) ?? null);
+          }}
         />
       )}
       <div className="editor-body">

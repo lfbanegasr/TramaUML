@@ -19,14 +19,19 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.*;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.util.*;
 import java.util.concurrent.*;
+
+import javax.imageio.ImageIO;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -3597,5 +3602,360 @@ class NucleoIntegracionTest {
                                 post("/api/modelos/" + modelo + "/generacion/generar"),
                                 clienteAjeno))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void asistenciaTextoRevisionAplicacionYRechazo() throws Exception {
+        var c = login(usuario, clave);
+        var p = proyecto(c);
+        String modelo = p.get("idModelo").asText();
+        asegurarSesion(c, modelo);
+
+        String prompt =
+                "Crea una clase Cliente con atributos id: Long, nombre: String y una clase Pedido"
+                        + " con atributo fecha: LocalDate, con relación 1 a *";
+        var creada =
+                respuesta(
+                        mvc.perform(
+                                        autorizado(
+                                                        post(
+                                                                "/api/modelos/"
+                                                                        + modelo
+                                                                        + "/ia/solicitud/texto"),
+                                                        c)
+                                                .contentType("application/json")
+                                                .content(
+                                                        json.writeValueAsString(
+                                                                Map.of("prompt", prompt))))
+                                .andExpect(status().isCreated())
+                                .andExpect(jsonPath("$.estadoSolicitud").value("COMPLETADO"))
+                                .andExpect(jsonPath("$.confianzaGeneral").value(0.93)));
+        String propuesta = creada.get("idPropuesta").asText();
+
+        mvc.perform(autorizado(get("/api/modelos/" + modelo + "/ia/propuestas/" + propuesta), c))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.estado").value("LISTO"))
+                .andExpect(jsonPath("$.operaciones", Matchers.hasSize(6)))
+                .andExpect(jsonPath("$.operaciones[5].tipoEntidad").value("RELACION"))
+                .andExpect(jsonPath("$.operaciones[5].dependencias", Matchers.hasSize(2)));
+
+        mvc.perform(
+                        autorizado(
+                                post(
+                                        "/api/modelos/"
+                                                + modelo
+                                                + "/ia/propuestas/"
+                                                + propuesta
+                                                + "/aplicar"),
+                                c))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.estado").value("APLICADO"))
+                .andExpect(jsonPath("$.revision").value(2));
+
+        mvc.perform(autorizado(get("/api/modelos/" + modelo), c))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.clases", Matchers.hasSize(2)))
+                .andExpect(jsonPath("$.atributos", Matchers.hasSize(3)))
+                .andExpect(jsonPath("$.relaciones", Matchers.hasSize(1)));
+        verify(canal, atLeastOnce()).publicarCambio(any());
+
+        mvc.perform(
+                        autorizado(
+                                post(
+                                        "/api/modelos/"
+                                                + modelo
+                                                + "/ia/propuestas/"
+                                                + propuesta
+                                                + "/aplicar"),
+                                c))
+                .andExpect(status().isConflict());
+
+        var segunda =
+                respuesta(
+                        mvc.perform(
+                                        autorizado(
+                                                        post(
+                                                                "/api/modelos/"
+                                                                        + modelo
+                                                                        + "/ia/solicitud/texto"),
+                                                        c)
+                                                .contentType("application/json")
+                                                .content(
+                                                        json.writeValueAsString(
+                                                                Map.of(
+                                                                        "prompt",
+                                                                        "Crea una clase Factura"))))
+                                .andExpect(status().isCreated()));
+        String propuestaRechazada = segunda.get("idPropuesta").asText();
+        mvc.perform(
+                        autorizado(
+                                        post(
+                                                "/api/modelos/"
+                                                        + modelo
+                                                        + "/ia/propuestas/"
+                                                        + propuestaRechazada
+                                                        + "/rechazar"),
+                                        c)
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of("motivo", "No corresponde al alcance"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.estado").value("RECHAZADO"));
+
+        mvc.perform(autorizado(get("/api/modelos/" + modelo), c))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.revision").value(2))
+                .andExpect(jsonPath("$.clases", Matchers.hasSize(2)));
+    }
+
+    @Test
+    void propuestaIaDesactualizadaAisladaYCsrf() throws Exception {
+        var c = login(usuario, clave);
+        var p1 = proyecto(c);
+        var p2 = proyecto(c);
+        String modelo = p1.get("idModelo").asText();
+        String otroModelo = p2.get("idModelo").asText();
+        asegurarSesion(c, modelo);
+
+        mvc.perform(
+                        post("/api/modelos/" + modelo + "/ia/solicitud/texto")
+                                .cookie(c.sesion())
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of("prompt", "Crea clase SinCsrf"))))
+                .andExpect(status().isForbidden());
+
+        var creada =
+                respuesta(
+                        mvc.perform(
+                                        autorizado(
+                                                        post(
+                                                                "/api/modelos/"
+                                                                        + modelo
+                                                                        + "/ia/solicitud/texto"),
+                                                        c)
+                                                .contentType("application/json")
+                                                .content(
+                                                        json.writeValueAsString(
+                                                                Map.of(
+                                                                        "prompt",
+                                                                        "Crea clase"
+                                                                            + " PropuestaAntigua"))))
+                                .andExpect(status().isCreated()));
+        String propuesta = creada.get("idPropuesta").asText();
+
+        mvc.perform(
+                        autorizado(
+                                get("/api/modelos/" + otroModelo + "/ia/propuestas/" + propuesta),
+                                c))
+                .andExpect(status().isNotFound());
+
+        enviar(
+                        c,
+                        modelo,
+                        cambio(1, UUID.randomUUID(), clase(UUID.randomUUID(), "CambioConcurrente")))
+                .andExpect(status().isOk());
+
+        mvc.perform(
+                        autorizado(
+                                post(
+                                        "/api/modelos/"
+                                                + modelo
+                                                + "/ia/propuestas/"
+                                                + propuesta
+                                                + "/aplicar"),
+                                c))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.estado").value("DESACTUALIZADO"))
+                .andExpect(jsonPath("$.aplicada").value(false));
+
+        assertThat(
+                        jdbc.queryForObject(
+                                "select estado from uml_colaborativo.propuesta_inteligente where"
+                                        + " id=?",
+                                String.class,
+                                UUID.fromString(propuesta)))
+                .isEqualTo("DESACTUALIZADO");
+        mvc.perform(autorizado(get("/api/modelos/" + modelo), c))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.revision").value(2))
+                .andExpect(jsonPath("$.clases", Matchers.hasSize(1)));
+    }
+
+    @Test
+    void vozEImagenConservanElOriginalYNoInventanReconocimiento() throws Exception {
+        var c = login(usuario, clave);
+        String modelo = proyecto(c).get("idModelo").asText();
+        var audio =
+                new MockMultipartFile(
+                        "archivo", "instruccion.webm", "audio/webm", new byte[] {26, 69, -33, -93});
+
+        mvc.perform(
+                        autorizado(
+                                multipart("/api/modelos/" + modelo + "/ia/solicitud/voz")
+                                        .file(audio),
+                                c))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.estadoSolicitud").value("FALLIDO"))
+                .andExpect(jsonPath("$.idPropuesta").isEmpty())
+                .andExpect(jsonPath("$.mensaje", Matchers.containsString("transcripción")));
+
+        mvc.perform(
+                        autorizado(
+                                multipart("/api/modelos/" + modelo + "/ia/solicitud/voz")
+                                        .file(audio)
+                                        .file(
+                                                new MockMultipartFile(
+                                                        "texto",
+                                                        "",
+                                                        "text/plain",
+                                                        "Crea clase Dictada"
+                                                                .getBytes(
+                                                                        java.nio.charset
+                                                                                .StandardCharsets
+                                                                                .UTF_8))),
+                                c))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.estadoSolicitud").value("COMPLETADO"))
+                .andExpect(jsonPath("$.idPropuesta").isNotEmpty());
+
+        var salida = new ByteArrayOutputStream();
+        ImageIO.write(new BufferedImage(3, 3, BufferedImage.TYPE_INT_RGB), "png", salida);
+        var imagen =
+                new MockMultipartFile("archivo", "pizarra.png", "image/png", salida.toByteArray());
+        mvc.perform(
+                        autorizado(
+                                multipart("/api/modelos/" + modelo + "/ia/solicitud/imagen")
+                                        .file(imagen),
+                                c))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.estadoSolicitud").value("FALLIDO"))
+                .andExpect(jsonPath("$.mensaje", Matchers.containsString("OCR")));
+
+        assertThat(
+                        jdbc.queryForObject(
+                                """
+                                select count(*) from uml_colaborativo.archivo_almacenado a
+                                join uml_colaborativo.solicitud_inteligente s on s.id_archivo_origen=a.id
+                                where s.id_modelo=? and a.categoria='AUDIO_VOZ'
+                                """,
+                                Long.class,
+                                UUID.fromString(modelo)))
+                .isEqualTo(2);
+        assertThat(
+                        jdbc.queryForObject(
+                                """
+                                select count(*) from uml_colaborativo.archivo_almacenado a
+                                join uml_colaborativo.solicitud_inteligente s on s.id_archivo_origen=a.id
+                                where s.id_modelo=? and a.categoria='IMAGEN_DIAGRAMA'
+                                  and octet_length(a.contenido)>0 and s.estado='FALLIDO'
+                                """,
+                                Long.class,
+                                UUID.fromString(modelo)))
+                .isEqualTo(1);
+    }
+
+    @Test
+    void imagenValidaFirmaYAsistenciaRespetaPermisosReales() throws Exception {
+        var propietario = login(usuario, clave);
+        String modelo = proyecto(propietario).get("idModelo").asText();
+        var falsa =
+                new MockMultipartFile(
+                        "archivo", "no-es-imagen.png", "image/png", "contenido".getBytes());
+        mvc.perform(
+                        autorizado(
+                                multipart("/api/modelos/" + modelo + "/ia/solicitud/imagen")
+                                        .file(falsa),
+                                propietario))
+                .andExpect(status().isUnprocessableEntity());
+
+        String ajeno = "ia_ajeno_" + UUID.randomUUID().toString().substring(0, 8);
+        fixture(ajeno);
+        var sinPermiso = login(ajeno, clave);
+        mvc.perform(
+                        autorizado(
+                                        post("/api/modelos/" + modelo + "/ia/solicitud/texto"),
+                                        sinPermiso)
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of("prompt", "Crea clase Indebida"))))
+                .andExpect(status().isForbidden());
+        mvc.perform(
+                        get("/api/modelos/" + modelo + "/ia/propuestas/vigente")
+                                .cookie(sinPermiso.sesion()))
+                .andExpect(status().isForbidden());
+
+        assertThat(
+                        jdbc.queryForObject(
+                                """
+                                select count(*) from uml_colaborativo.rol r
+                                join uml_colaborativo.rol_permiso rp on rp.id_rol=r.id
+                                join uml_colaborativo.permiso p on p.id=rp.id_permiso
+                                where r.codigo in ('PROPIETARIO_PROYECTO','EDITOR_PROYECTO')
+                                  and p.codigo in ('SOLICITAR_IA','REVISAR_PROPUESTA_IA','APLICAR_PROPUESTA_IA')
+                                """,
+                                Long.class))
+                .isEqualTo(6);
+    }
+
+    @Test
+    void falloAlAplicarRevierteTodaLaRevisionIa() throws Exception {
+        var c = login(usuario, clave);
+        String modelo = proyecto(c).get("idModelo").asText();
+        asegurarSesion(c, modelo);
+        var creada =
+                respuesta(
+                        mvc.perform(
+                                        autorizado(
+                                                        post(
+                                                                "/api/modelos/"
+                                                                        + modelo
+                                                                        + "/ia/solicitud/texto"),
+                                                        c)
+                                                .contentType("application/json")
+                                                .content(
+                                                        json.writeValueAsString(
+                                                                Map.of(
+                                                                        "prompt",
+                                                                        "Crea clase Rollback con"
+                                                                            + " atributo nombre:"
+                                                                            + " String"))))
+                                .andExpect(status().isCreated()));
+        UUID propuesta = UUID.fromString(creada.get("idPropuesta").asText());
+        jdbc.update(
+                """
+                update uml_colaborativo.operacion_propuesta
+                set valor_propuesto=jsonb_set(valor_propuesto,'{nombre}','\"\"'::jsonb)
+                where id_propuesta=? and tipo_entidad='ATRIBUTO'
+                """,
+                propuesta);
+        clearInvocations(canal);
+
+        mvc.perform(
+                        autorizado(
+                                post(
+                                        "/api/modelos/"
+                                                + modelo
+                                                + "/ia/propuestas/"
+                                                + propuesta
+                                                + "/aplicar"),
+                                c))
+                .andExpect(status().isUnprocessableEntity());
+
+        mvc.perform(autorizado(get("/api/modelos/" + modelo), c))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.revision").value(1))
+                .andExpect(jsonPath("$.clases").isEmpty());
+        assertThat(
+                        jdbc.queryForObject(
+                                "select estado from uml_colaborativo.propuesta_inteligente where"
+                                        + " id=?",
+                                String.class,
+                                propuesta))
+                .isEqualTo("LISTO");
+        verify(canal, never()).publicarCambio(any());
     }
 }

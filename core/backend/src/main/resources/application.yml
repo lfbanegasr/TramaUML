@@ -23,6 +23,15 @@ server:
     include-stacktrace: never
 uml:
   cookie-secure: ${UML_COOKIE_SECURE:true}
+  ia:
+    proveedor: ${UML_IA_PROVEEDOR:LOCAL}
+    clave: ${UML_IA_CLAVE:}
+    url-texto: ${UML_IA_URL_TEXTO:}
+    url-vision: ${UML_IA_URL_VISION:}
+    url-transcripcion: ${UML_IA_URL_TRANSCRIPCION:}
+    modelo-texto: ${UML_IA_MODELO_TEXTO:}
+    modelo-vision: ${UML_IA_MODELO_VISION:}
+    modelo-transcripcion: ${UML_IA_MODELO_TRANSCRIPCION:}
   bootstrap:
     enabled: ${UML_BOOTSTRAP_ENABLED:false}
     nombre-usuario: ${UML_ADMIN_USERNAME:}

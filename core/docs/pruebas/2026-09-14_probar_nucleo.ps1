@@ -22,11 +22,12 @@ function Invoke-Pg([string]$Programa,[string[]]$Argumentos) {
 if (-not (Test-Path -LiteralPath (Join-Path $clusterRoot 'data\PG_VERSION'))) {
     Invoke-Pg 'initdb.exe' @('-D',(Join-Path $clusterRoot 'data'),'--username=uml_test_owner','--auth=trust','--no-locale','-E','UTF8')
 }
-$tcpProbe = [Net.Sockets.TcpClient]::new()
-try { $portAvailable = $tcpProbe.ConnectAsync('127.0.0.1',$Puerto).Wait(1500) -and $tcpProbe.Connected }
-catch { $portAvailable = $false }
-finally { $tcpProbe.Dispose() }
-if (-not $portAvailable) {
+function Test-PgReady {
+    & (Join-Path $PostgresBin 'pg_isready.exe') -h 127.0.0.1 -p $Puerto -d postgres -t 1 *> $null
+    return $LASTEXITCODE -eq 0
+}
+$postgresReady = Test-PgReady
+if (-not $postgresReady) {
     $pidFile = Join-Path $clusterRoot 'data\postmaster.pid'
     if (Test-Path -LiteralPath $pidFile) {
         $pidLines = Get-Content -LiteralPath $pidFile -ErrorAction SilentlyContinue
@@ -40,9 +41,19 @@ if (-not $portAvailable) {
         }
     }
     $pgProcess = Start-Process -FilePath (Join-Path $PostgresBin 'pg_ctl.exe') -ArgumentList @(
-        '-D','data','-l','server.log','-o',('"-p '+$Puerto+' -h 127.0.0.1"'),'start','-w','-t','90'
-    ) -WorkingDirectory $clusterRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $clusterRoot 'inicio.stdout.log') -RedirectStandardError (Join-Path $clusterRoot 'inicio.stderr.log') -Wait
-    if ($pgProcess.ExitCode -ne 0) { throw 'No inició PostgreSQL aislado; revisa .qa/postgres/server.log.' }
+        '-D','data','-l','server.log','-o',('"-p '+$Puerto+' -h 127.0.0.1"'),'start','-W'
+    ) -WorkingDirectory $clusterRoot -WindowStyle Hidden -PassThru
+    for ($attempt = 0; $attempt -lt 360 -and -not $postgresReady; $attempt++) {
+        Start-Sleep -Milliseconds 250
+        $postgresReady = Test-PgReady
+    }
+    if (-not $postgresReady) {
+        if (-not $pgProcess.HasExited) { Stop-Process -Id $pgProcess.Id -Force }
+        throw 'PostgreSQL aislado no quedó disponible en 90 segundos; revisa .qa/postgres/server.log.'
+    }
+    $pgProcess | Wait-Process -Timeout 5 -ErrorAction SilentlyContinue
+    $pgProcess.Refresh()
+    if (-not $pgProcess.HasExited) { Stop-Process -Id $pgProcess.Id -Force }
 }
 $actualCluster = & (Join-Path $PostgresBin 'psql.exe') -X -At -h 127.0.0.1 -p $Puerto -U uml_test_owner -d postgres -c 'show data_directory'
 if ($LASTEXITCODE -ne 0 -or [IO.Path]::GetFullPath($actualCluster.Trim()) -ne [IO.Path]::GetFullPath((Join-Path $clusterRoot 'data'))) {
@@ -58,6 +69,7 @@ Invoke-Pg 'psql.exe' @('-X','-v','ON_ERROR_STOP=1','-h','127.0.0.1','-p',"$Puert
 Invoke-Pg 'psql.exe' @('-X','-v','ON_ERROR_STOP=1','-h','127.0.0.1','-p',"$Puerto",'-U','uml_test_owner','-d',$testDatabase,'-f',(Join-Path $implementationRoot 'core\docs\migraciones\2026-09-15_02_resolucion_conflictos.sql'))
 Invoke-Pg 'psql.exe' @('-X','-v','ON_ERROR_STOP=1','-h','127.0.0.1','-p',"$Puerto",'-U','uml_test_owner','-d',$testDatabase,'-f',(Join-Path $implementationRoot 'core\docs\migraciones\2026-09-15_03_historial_permisos.sql'))
 Invoke-Pg 'psql.exe' @('-X','-v','ON_ERROR_STOP=1','-h','127.0.0.1','-p',"$Puerto",'-U','uml_test_owner','-d',$testDatabase,'-f',(Join-Path $implementationRoot 'core\docs\migraciones\2026-09-18_04_xmi_generacion_permisos.sql'))
+Invoke-Pg 'psql.exe' @('-X','-v','ON_ERROR_STOP=1','-h','127.0.0.1','-p',"$Puerto",'-U','uml_test_owner','-d',$testDatabase,'-f',(Join-Path $implementationRoot 'core\docs\migraciones\2026-09-19_05_asistencia_inteligente_permisos.sql'))
 $env:UML_TEST_DB_URL = "jdbc:postgresql://127.0.0.1:$Puerto/$testDatabase" + '?currentSchema=uml_colaborativo,public'
 Invoke-Pg 'psql.exe' @('-X','-v','ON_ERROR_STOP=1','-h','127.0.0.1','-p',"$Puerto",'-U','uml_test_owner','-d',$testDatabase,'-c','ALTER ROLE uml_app LOGIN')
 Write-Output "Base ficticia preparada: $testDatabase (127.0.0.1:$Puerto). Se conserva para inspección."

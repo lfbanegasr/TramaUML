@@ -18,7 +18,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     csrf = await r.json();
   }
   const headers = new Headers(init.headers);
-  if (init.body) headers.set('Content-Type', 'application/json');
+  if (init.body && !(init.body instanceof FormData))
+    headers.set('Content-Type', 'application/json');
   if (csrf && !['GET', 'HEAD'].includes(method)) headers.set(csrf.header, csrf.token);
   let r: Response;
   try {
