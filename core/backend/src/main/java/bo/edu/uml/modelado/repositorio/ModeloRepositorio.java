@@ -196,6 +196,11 @@ public class ModeloRepositorio {
                 "ACTIVO".equals(c.estadoProyecto())
                         && !"ARCHIVADO".equals(c.estado())
                         && permiso(actor.id(), c.proyecto(), "EDITAR_MODELO");
+        boolean restorable =
+                "ACTIVO".equals(c.estadoProyecto())
+                        && !"ARCHIVADO".equals(c.estado())
+                        && (actor.esAdministrador()
+                                || permiso(actor.id(), c.proyecto(), "RESTAURAR_MODELO"));
         return new Modelo(
                 c.id(),
                 c.proyecto(),
@@ -205,6 +210,7 @@ public class ModeloRepositorio {
                 editable,
                 editable && permiso(actor.id(), c.proyecto(), "ORGANIZAR_MODELO"),
                 permiso(actor.id(), c.proyecto(), "VALIDAR_MODELO"),
+                restorable,
                 clases,
                 atributos,
                 operaciones,

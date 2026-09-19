@@ -2,33 +2,40 @@ package bo.edu.uml.acceso.controlador;
 
 import bo.edu.uml.acceso.dto.AccesoDto.*;
 import bo.edu.uml.acceso.modelo.Identidad;
+import bo.edu.uml.acceso.repositorio.AccesoRepositorio;
 import bo.edu.uml.acceso.servicio.AccesoServicio;
 import bo.edu.uml.compartido.ApiException;
 
 import jakarta.servlet.http.*;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.*;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.web.csrf.*;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Duration;
 import java.util.Map;
 
 @RestController
+@Validated
 @RequestMapping("/api/acceso")
 public class AccesoControlador {
     private final AccesoServicio servicio;
+    private final AccesoRepositorio repositorio;
     private final CookieCsrfTokenRepository csrf;
     private final boolean secure;
 
     public AccesoControlador(
             AccesoServicio servicio,
+            AccesoRepositorio repositorio,
             CookieCsrfTokenRepository csrf,
             @Value("${uml.cookie-secure}") boolean secure) {
         this.servicio = servicio;
+        this.repositorio = repositorio;
         this.csrf = csrf;
         this.secure = secure;
     }
@@ -79,6 +86,17 @@ public class AccesoControlador {
         return ResponseEntity.noContent()
                 .header(HttpHeaders.SET_COOKIE, cookie("", Duration.ZERO).toString())
                 .build();
+    }
+
+    /** CU01/CU02 — Historial de sesiones del usuario autenticado (paginado). */
+    @GetMapping("/sesiones")
+    PaginaSesiones sesiones(
+            @AuthenticationPrincipal Identidad actor,
+            @RequestParam(defaultValue = "0") @Min(0) @Max(10000) int pagina,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int tamano) {
+        var lista = repositorio.historialSesiones(actor.id(), pagina, tamano);
+        long total = repositorio.totalSesiones(actor.id());
+        return new PaginaSesiones(lista, pagina, tamano, total);
     }
 
     private ResponseCookie cookie(String token, Duration duration) {

@@ -211,6 +211,15 @@ public class AdministracionServicio {
         return repo.rol(id);
     }
 
+    @Transactional(readOnly = true)
+    public bo.edu.uml.acceso.dto.AccesoDto.PaginaSesiones sesionesUsuario(
+            Identidad actor, UUID idUsuario, int pagina, int tamano) {
+        autorizar(actor, "GESTIONAR_USUARIOS");
+        var lista = acceso.historialSesiones(idUsuario, pagina, tamano);
+        long total = acceso.totalSesiones(idUsuario);
+        return new bo.edu.uml.acceso.dto.AccesoDto.PaginaSesiones(lista, pagina, tamano, total);
+    }
+
     private void auditar(Identidad a, String accion, UUID id) {
         bo.edu.uml.compartido.Auditoria.despuesDelCommit(a.id(), accion, id);
     }

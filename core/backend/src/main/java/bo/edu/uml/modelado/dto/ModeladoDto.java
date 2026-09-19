@@ -34,6 +34,7 @@ public final class ModeladoDto {
             boolean puedeEditar,
             boolean puedeOrganizar,
             boolean puedeValidar,
+            boolean puedeRestaurar,
             List<Map<String, Object>> clases,
             List<Map<String, Object>> atributos,
             List<Map<String, Object>> operaciones,

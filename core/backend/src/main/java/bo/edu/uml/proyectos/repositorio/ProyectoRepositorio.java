@@ -49,7 +49,9 @@ public class ProyectoRepositorio {
             coalesce((select revision_actual from uml_colaborativo.modelo_uml m where m.id_proyecto=p.id order by m.creado_en,m.id limit 1),0) revision_modelo,
             (select count(*) from uml_colaborativo.miembro_proyecto m where m.id_proyecto=p.id and m.estado='ACTIVO') miembros_activos,
             (select count(*) from uml_colaborativo.sesion_edicion_modelo s join uml_colaborativo.modelo_uml m on m.id=s.id_modelo
-              where m.id_proyecto=p.id and s.estado='ACTIVO' and s.modo='EDICION') sesiones_edicion
+              where m.id_proyecto=p.id and s.estado='ACTIVO' and s.modo='EDICION') sesiones_edicion,
+            coalesce((select count(*) from uml_colaborativo.version_modelo_uml v join uml_colaborativo.modelo_uml m on m.id=v.id_modelo
+              where m.id_proyecto=p.id),0) total_versiones
             """;
 
     private MapSqlParameterSource parametros(
@@ -188,7 +190,8 @@ public class ProyectoRepositorio {
                 r.getString("nombre_modelo"),
                 r.getLong("revision_modelo"),
                 r.getInt("miembros_activos"),
-                r.getInt("sesiones_edicion"));
+                r.getInt("sesiones_edicion"),
+                r.getLong("total_versiones"));
     }
 
     public void crear(UUID id, Identidad actor, Crear datos, UUID modelo) {

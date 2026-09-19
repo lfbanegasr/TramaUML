@@ -160,6 +160,14 @@ export function ProyectoResumen({
                       </dd>
                     </div>
                     <div>
+                      <dt>Versiones en el historial</dt>
+                      <dd>
+                        {datos.puedeVerModelo
+                          ? `${datos.totalVersiones} versión${datos.totalVersiones !== 1 ? 'es' : ''}`
+                          : '—'}
+                      </dd>
+                    </div>
+                    <div>
                       <dt>Sesiones de edición registradas</dt>
                       <dd>{datos.sesionesEdicionActivas}</dd>
                     </div>

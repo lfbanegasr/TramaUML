@@ -6,16 +6,19 @@ import { EditorPage } from '../features/modelado/pages/EditorPage';
 import type { Proyecto } from '../features/proyectos/api/proyectosApi';
 import { consultaInicial, type ConsultaProyectos } from '../features/proyectos/api/proyectosApi';
 import { AdministracionPage } from '../features/administracion/pages/AdministracionPage';
+import { SesionesPanel } from '../features/acceso/components/SesionesPanel';
 export function App() {
   const { sesion, cargando, salir } = useSesion();
   const [proyecto, setProyecto] = useState<Proyecto | null>(null),
     [error, setError] = useState('');
   const [administracion, setAdministracion] = useState(false);
+  const [verSesiones, setVerSesiones] = useState(false);
   const [consulta, setConsulta] = useState<ConsultaProyectos>(consultaInicial);
   useEffect(() => {
     setConsulta(consultaInicial);
     setProyecto(null);
     setAdministracion(false);
+    setVerSesiones(false);
   }, [sesion?.usuario.id]);
   const guardia = useRef<(() => boolean) | null>(null);
   const finalizador = useRef<(() => Promise<void>) | null>(null);
@@ -61,6 +64,7 @@ export function App() {
   }
   return (
     <div className="workspace">
+      {verSesiones && <SesionesPanel cerrar={() => setVerSesiones(false)} />}
       <aside className="sidebar">
         <div className="brand">
           <span className="brand-icon">◇</span> trama<span className="brand-tag">UML</span>
@@ -111,6 +115,14 @@ export function App() {
               </small>
             </div>
           </div>
+          <button
+            className="nav-item"
+            id="btn-mis-sesiones"
+            onClick={() => setVerSesiones(true)}
+            title="Ver historial de sesiones"
+          >
+            🔒 <span>Mis sesiones</span>
+          </button>
           <button className="nav-item" onClick={cerrar}>
             ↪ Cerrar sesión
           </button>

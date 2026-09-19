@@ -144,4 +144,51 @@ public class AccesoRepositorio {
         if (roles != 1) throw new IllegalStateException("Falta el rol vigente SUPERADMINISTRADOR.");
         return id;
     }
+
+    public record SesionResumen(
+            UUID id,
+            String emitidoEn,
+            String expiraEn,
+            String revocadoEn,
+            String motivoRevocacion,
+            String direccionIp,
+            String agenteCliente,
+            boolean activa) {}
+
+    public List<SesionResumen> historialSesiones(UUID idUsuario, int pagina, int tamano) {
+        return jdbc.query(
+                """
+                select id,emitido_en,expira_en,revocado_en,motivo_revocacion,
+                  host(direccion_ip) direccion_ip,agente_cliente
+                from uml_colaborativo.sesion_autenticacion
+                where id_usuario=:id
+                order by emitido_en desc
+                limit :limite offset :offset
+                """,
+                Map.of("id", idUsuario, "limite", tamano, "offset", pagina * tamano),
+                (r, n) -> {
+                    var revocadoEn = r.getObject("revocado_en", java.time.OffsetDateTime.class);
+                    var expiraEn = r.getObject("expira_en", java.time.OffsetDateTime.class);
+                    boolean activa =
+                            revocadoEn == null
+                                    && expiraEn != null
+                                    && expiraEn.isAfter(java.time.OffsetDateTime.now());
+                    return new SesionResumen(
+                            r.getObject("id", UUID.class),
+                            r.getObject("emitido_en", java.time.OffsetDateTime.class).toString(),
+                            expiraEn == null ? null : expiraEn.toString(),
+                            revocadoEn == null ? null : revocadoEn.toString(),
+                            r.getString("motivo_revocacion"),
+                            r.getString("direccion_ip"),
+                            r.getString("agente_cliente"),
+                            activa);
+                });
+    }
+
+    public long totalSesiones(UUID idUsuario) {
+        return jdbc.queryForObject(
+                "select count(*) from uml_colaborativo.sesion_autenticacion where id_usuario=:id",
+                Map.of("id", idUsuario),
+                Long.class);
+    }
 }

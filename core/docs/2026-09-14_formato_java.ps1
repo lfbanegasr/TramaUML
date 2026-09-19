@@ -1,4 +1,4 @@
-﻿param(
+param(
     [string]$JavaHome = $env:JAVA_HOME,
     [switch]$Aplicar,
     [switch]$InstalarFormateador
@@ -31,8 +31,12 @@ if (-not $java -or -not (Test-Path -LiteralPath $java)) {
 if (-not (Test-Path -LiteralPath $java)) { throw 'Indica un JDK 21 con -JavaHome.' }
 Push-Location $raiz
 try {
-    $archivos = @(rg --files core/backend/src -g '*.java')
-    if ($LASTEXITCODE -ne 0 -or $archivos.Count -eq 0) { throw 'No se encontraron fuentes Java dentro del núcleo.' }
+    $archivos = if (Get-Command rg -ErrorAction SilentlyContinue) {
+        @(rg --files core/backend/src -g '*.java')
+    } else {
+        @((Get-ChildItem -Path core/backend/src -Recurse -Filter '*.java').FullName)
+    }
+    if ($archivos.Count -eq 0) { throw 'No se encontraron fuentes Java dentro del núcleo.' }
     $opciones = if ($Aplicar) { @('--aosp', '--replace') } else { @('--aosp', '--dry-run', '--set-exit-if-changed') }
     & $java -jar $jar @opciones @archivos
     if ($LASTEXITCODE -ne 0) { throw 'El formato Java requiere revisión.' }

@@ -33,7 +33,8 @@ public final class ProyectoDto {
             String nombreModelo,
             long revisionModelo,
             int miembrosActivos,
-            int sesionesEdicionActivas) {}
+            int sesionesEdicionActivas,
+            long totalVersiones) {}
 
     public record Actualizar(
             @NotBlank @Size(max = 80) @Pattern(regexp = "[A-Za-z0-9_.-]+") String codigo,

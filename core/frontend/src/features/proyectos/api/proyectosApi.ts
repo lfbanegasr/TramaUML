@@ -20,7 +20,9 @@ export type Proyecto = {
   revisionModelo: number;
   miembrosActivos: number;
   sesionesEdicionActivas: number;
+  totalVersiones: number;
 };
+
 export type Pagina = { proyectos: Proyecto[]; pagina: number; tamano: number; total: number };
 export type ConsultaProyectos = {
   filtro: string;

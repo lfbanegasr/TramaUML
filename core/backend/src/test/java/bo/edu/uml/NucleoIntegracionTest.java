@@ -13,6 +13,7 @@ import com.fasterxml.jackson.databind.*;
 
 import jakarta.servlet.http.Cookie;
 
+import org.hamcrest.Matchers;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -2746,5 +2747,855 @@ class NucleoIntegracionTest {
                 .isEqualTo("ABIERTO");
         assertThat(actividad(proyecto.toString())).isEqualTo(actividadAntes);
         verify(canal, never()).publicarConflicto(any());
+    }
+
+    // ─── CU19 – Consultar historial del modelo ─────────────────────────────
+
+    @Test
+    void historialVacioYSinPermiso() throws Exception {
+        var c = login(usuario, clave);
+        var p = proyecto(c);
+        String modelo = p.get("idModelo").asText();
+        // Rev 1 viene del proyecto; la primera versión guarda el modelo vacío.
+        mvc.perform(autorizado(get("/api/modelos/" + modelo + "/versiones"), c))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.versiones[0].numeroVersion").value(1));
+
+        // Sin permiso: usuario sin acceso al proyecto.
+        String u2 = "historial_ext_" + UUID.randomUUID().toString().substring(0, 8);
+        fixture(u2);
+        var ext = login(u2, clave);
+        mvc.perform(autorizado(get("/api/modelos/" + modelo + "/versiones"), ext))
+                .andExpect(status().isNotFound());
+        mvc.perform(
+                        autorizado(
+                                get("/api/modelos/" + modelo + "/versiones/" + UUID.randomUUID()),
+                                ext))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void historialConVersionesYDetalle() throws Exception {
+        var c = login(usuario, clave);
+        var p = proyecto(c);
+        String modelo = p.get("idModelo").asText();
+
+        // Crear una clase para generar rev 2 y versión 2.
+        UUID idClase = UUID.randomUUID();
+        enviar(c, modelo, cambio(1, UUID.randomUUID(), clase(idClase, "HistorialClase")))
+                .andExpect(status().isOk());
+
+        // Listar: debe haber 2 versiones.
+        var lista =
+                mvc.perform(autorizado(get("/api/modelos/" + modelo + "/versiones"), c))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.total").value(2))
+                        .andReturn();
+        var nodos = json.readTree(lista.getResponse().getContentAsString());
+        assertThat(nodos.get("versiones").size()).isEqualTo(2);
+        // Orden descendente por número de versión.
+        assertThat(nodos.get("versiones").get(0).get("numeroVersion").asInt())
+                .isGreaterThan(nodos.get("versiones").get(1).get("numeroVersion").asInt());
+
+        // Detalle de la versión 2.
+        String idVersion2 = nodos.get("versiones").get(0).get("id").asText();
+        mvc.perform(autorizado(get("/api/modelos/" + modelo + "/versiones/" + idVersion2), c))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.resumen.revision").value(2))
+                .andExpect(jsonPath("$.instantanea.formato_version").value(2));
+
+        // Comparación entre v1 y v2.
+        String idVersion1 = nodos.get("versiones").get(1).get("id").asText();
+        mvc.perform(
+                        autorizado(
+                                get(
+                                        "/api/modelos/"
+                                                + modelo
+                                                + "/comparaciones?desde="
+                                                + idVersion1
+                                                + "&hasta="
+                                                + idVersion2),
+                                c))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.diferencias").isArray())
+                .andExpect(jsonPath("$.diferencias[0].operacion").value("AGREGADO"));
+    }
+
+    @Test
+    void historialComparacionVersionesCruzadas() throws Exception {
+        // Versiones de modelos distintos no se pueden comparar entre sí.
+        var c = login(usuario, clave);
+        var p1 = proyecto(c);
+        var p2 = proyecto(c);
+        String m1 = p1.get("idModelo").asText();
+        String m2 = p2.get("idModelo").asText();
+        String v1 =
+                mvc.perform(autorizado(get("/api/modelos/" + m1 + "/versiones"), c))
+                        .andReturn()
+                        .getResponse()
+                        .getContentAsString();
+        String v2 =
+                mvc.perform(autorizado(get("/api/modelos/" + m2 + "/versiones"), c))
+                        .andReturn()
+                        .getResponse()
+                        .getContentAsString();
+        String idV1 = json.readTree(v1).get("versiones").get(0).get("id").asText();
+        String idV2 = json.readTree(v2).get("versiones").get(0).get("id").asText();
+        mvc.perform(
+                        autorizado(
+                                get(
+                                        "/api/modelos/"
+                                                + m1
+                                                + "/comparaciones?desde="
+                                                + idV1
+                                                + "&hasta="
+                                                + idV2),
+                                c))
+                .andExpect(status().isBadRequest());
+    }
+
+    // ─── CU20 – Restaurar versión del modelo ───────────────────────────────
+
+    @Test
+    void restauracionPrevisualizacionSinBloqueadores() throws Exception {
+        var c = login(usuario, clave);
+        var p = proyecto(c);
+        String modelo = p.get("idModelo").asText();
+        // Crear clase para generar rev 2 / versión 2.
+        enviar(c, modelo, cambio(1, UUID.randomUUID(), clase(UUID.randomUUID(), "PrevizClase")))
+                .andExpect(status().isOk());
+        // Obtener id de la versión 1.
+        var lista =
+                json.readTree(
+                        mvc.perform(autorizado(get("/api/modelos/" + modelo + "/versiones"), c))
+                                .andReturn()
+                                .getResponse()
+                                .getContentAsString());
+        String idV1 = null;
+        for (var v : lista.get("versiones")) {
+            if (v.get("numeroVersion").asInt() == 1) {
+                idV1 = v.get("id").asText();
+                break;
+            }
+        }
+        assertThat(idV1).isNotNull();
+        // Vista previa sin bloqueadores.
+        mvc.perform(
+                        autorizado(
+                                        post(
+                                                "/api/modelos/"
+                                                        + modelo
+                                                        + "/restauraciones/previsualizaciones"),
+                                        c)
+                                .contentType("application/json")
+                                .content(json.writeValueAsString(Map.of("idVersionOrigen", idV1))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.bloqueadores").isEmpty());
+    }
+
+    @Test
+    void restauracionCompletaYSnapshotEquivalente() throws Exception {
+        var c = login(usuario, clave);
+        var p = proyecto(c);
+        String modelo = p.get("idModelo").asText();
+
+        // Rev 2: crear clase A.
+        UUID idClaseA = UUID.randomUUID();
+        enviar(c, modelo, cambio(1, UUID.randomUUID(), clase(idClaseA, "ClaseA")))
+                .andExpect(status().isOk());
+        // Rev 3: crear clase B.
+        UUID idClaseB = UUID.randomUUID();
+        enviar(c, modelo, cambio(2, UUID.randomUUID(), clase(idClaseB, "ClaseB")))
+                .andExpect(status().isOk());
+
+        // Obtener versión 2 (tiene solo ClaseA).
+        var lista =
+                json.readTree(
+                        mvc.perform(autorizado(get("/api/modelos/" + modelo + "/versiones"), c))
+                                .andReturn()
+                                .getResponse()
+                                .getContentAsString());
+        String idV2 = null;
+        for (var v : lista.get("versiones")) {
+            if (v.get("numeroVersion").asInt() == 2) {
+                idV2 = v.get("id").asText();
+                break;
+            }
+        }
+        assertThat(idV2).isNotNull();
+
+        // Restaurar a versión 2 desde rev 3.
+        UUID solicitud = UUID.randomUUID();
+        var resultado =
+                mvc.perform(
+                                autorizado(post("/api/modelos/" + modelo + "/restauraciones"), c)
+                                        .contentType("application/json")
+                                        .content(
+                                                json.writeValueAsString(
+                                                        Map.of(
+                                                                "idSolicitudRestauracion",
+                                                                solicitud,
+                                                                "idVersionOrigen",
+                                                                idV2,
+                                                                "revisionEsperada",
+                                                                3,
+                                                                "motivo",
+                                                                "Test de restauración",
+                                                                "confirmar",
+                                                                true))))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.revision").value(4))
+                        .andExpect(jsonPath("$.repetido").value(false))
+                        .andReturn();
+
+        // Verificar que ClaseB ya no existe en el modelo restaurado.
+        mvc.perform(autorizado(get("/api/modelos/" + modelo), c))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.revision").value(4));
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from uml_colaborativo.clase_uml where id=?"
+                                        + " and eliminado_en is null",
+                                Integer.class,
+                                idClaseB))
+                .isZero();
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from uml_colaborativo.clase_uml where id=?"
+                                        + " and eliminado_en is null",
+                                Integer.class,
+                                idClaseA))
+                .isEqualTo(1);
+
+        // La versión restaurada debe tener id_version_restaurada apuntando a v2.
+        String idV4 =
+                json.readTree(resultado.getResponse().getContentAsString()).get("version").asText();
+        assertThat(
+                        jdbc.queryForObject(
+                                "select id_version_restaurada from"
+                                        + " uml_colaborativo.version_modelo_uml where id=?",
+                                UUID.class,
+                                UUID.fromString(idV4)))
+                .isEqualTo(UUID.fromString(idV2));
+    }
+
+    @Test
+    void restauracionIdempotente() throws Exception {
+        var c = login(usuario, clave);
+        var p = proyecto(c);
+        String modelo = p.get("idModelo").asText();
+        enviar(c, modelo, cambio(1, UUID.randomUUID(), clase(UUID.randomUUID(), "IdempClase")))
+                .andExpect(status().isOk());
+        var lista =
+                json.readTree(
+                        mvc.perform(autorizado(get("/api/modelos/" + modelo + "/versiones"), c))
+                                .andReturn()
+                                .getResponse()
+                                .getContentAsString());
+        String idV1 = null;
+        for (var v : lista.get("versiones")) {
+            if (v.get("numeroVersion").asInt() == 1) {
+                idV1 = v.get("id").asText();
+                break;
+            }
+        }
+        UUID solicitud = UUID.randomUUID();
+        var cuerpo =
+                json.writeValueAsString(
+                        Map.of(
+                                "idSolicitudRestauracion",
+                                solicitud,
+                                "idVersionOrigen",
+                                idV1,
+                                "revisionEsperada",
+                                2,
+                                "motivo",
+                                "Test idempotencia",
+                                "confirmar",
+                                true));
+        mvc.perform(
+                        autorizado(post("/api/modelos/" + modelo + "/restauraciones"), c)
+                                .contentType("application/json")
+                                .content(cuerpo))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.repetido").value(false));
+        // Segunda petición con el mismo UUID → repetido=true.
+        mvc.perform(
+                        autorizado(post("/api/modelos/" + modelo + "/restauraciones"), c)
+                                .contentType("application/json")
+                                .content(cuerpo))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.repetido").value(true));
+        // Debe haber solo una versión 3.
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from uml_colaborativo.version_modelo_uml"
+                                        + " where id_modelo=?",
+                                Integer.class,
+                                UUID.fromString(modelo)))
+                .isEqualTo(3);
+    }
+
+    @Test
+    void restauracionSinConfimarRechazada() throws Exception {
+        var c = login(usuario, clave);
+        var p = proyecto(c);
+        String modelo = p.get("idModelo").asText();
+        var lista =
+                json.readTree(
+                        mvc.perform(autorizado(get("/api/modelos/" + modelo + "/versiones"), c))
+                                .andReturn()
+                                .getResponse()
+                                .getContentAsString());
+        String idV1 = lista.get("versiones").get(0).get("id").asText();
+        mvc.perform(
+                        autorizado(post("/api/modelos/" + modelo + "/restauraciones"), c)
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of(
+                                                        "idSolicitudRestauracion",
+                                                        UUID.randomUUID(),
+                                                        "idVersionOrigen",
+                                                        idV1,
+                                                        "revisionEsperada",
+                                                        1,
+                                                        "motivo",
+                                                        "Sin confirmación",
+                                                        "confirmar",
+                                                        false))))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void restauracionRevisionObsoleta() throws Exception {
+        var c = login(usuario, clave);
+        var p = proyecto(c);
+        String modelo = p.get("idModelo").asText();
+        enviar(c, modelo, cambio(1, UUID.randomUUID(), clase(UUID.randomUUID(), "ObsClase")))
+                .andExpect(status().isOk());
+        var lista =
+                json.readTree(
+                        mvc.perform(autorizado(get("/api/modelos/" + modelo + "/versiones"), c))
+                                .andReturn()
+                                .getResponse()
+                                .getContentAsString());
+        String idV1 = null;
+        for (var v : lista.get("versiones")) {
+            if (v.get("numeroVersion").asInt() == 1) {
+                idV1 = v.get("id").asText();
+                break;
+            }
+        }
+        // Enviar revisión incorrecta (1 en lugar de 2 que es la actual).
+        mvc.perform(
+                        autorizado(post("/api/modelos/" + modelo + "/restauraciones"), c)
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of(
+                                                        "idSolicitudRestauracion",
+                                                        UUID.randomUUID(),
+                                                        "idVersionOrigen",
+                                                        idV1,
+                                                        "revisionEsperada",
+                                                        1,
+                                                        "motivo",
+                                                        "Revisión obsoleta",
+                                                        "confirmar",
+                                                        true))))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void restauracionPermisosSeparados() throws Exception {
+        var cAdmin = login(usuario, clave);
+        var p = proyecto(cAdmin);
+        String modelo = p.get("idModelo").asText();
+        UUID idProyecto = UUID.fromString(p.get("id").asText());
+
+        var lista =
+                json.readTree(
+                        mvc.perform(
+                                        autorizado(
+                                                get("/api/modelos/" + modelo + "/versiones"),
+                                                cAdmin))
+                                .andReturn()
+                                .getResponse()
+                                .getContentAsString());
+        String idV1 = lista.get("versiones").get(0).get("id").asText();
+
+        // 1. Usuario con rol EDITOR_PROYECTO (tiene EDITAR_MODELO, pero NO RESTAURAR_MODELO)
+        String uEditor = "editor_" + UUID.randomUUID().toString().substring(0, 8);
+        UUID idEditor = fixture(uEditor);
+        miembroFixture(idProyecto, idEditor, "EDITOR_PROYECTO");
+        var cEditor = login(uEditor, clave);
+
+        mvc.perform(
+                        autorizado(post("/api/modelos/" + modelo + "/restauraciones"), cEditor)
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of(
+                                                        "idSolicitudRestauracion",
+                                                        UUID.randomUUID(),
+                                                        "idVersionOrigen",
+                                                        idV1,
+                                                        "revisionEsperada",
+                                                        1,
+                                                        "motivo",
+                                                        "Intento no autorizado",
+                                                        "confirmar",
+                                                        true))))
+                .andExpect(status().isForbidden());
+
+        // 2. Usuario con rol LECTOR_PROYECTO (solo lectura)
+        String uLector = "lector_" + UUID.randomUUID().toString().substring(0, 8);
+        UUID idLector = fixture(uLector);
+        miembroFixture(idProyecto, idLector, "LECTOR_PROYECTO");
+        var cLector = login(uLector, clave);
+
+        mvc.perform(
+                        autorizado(post("/api/modelos/" + modelo + "/restauraciones"), cLector)
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of(
+                                                        "idSolicitudRestauracion",
+                                                        UUID.randomUUID(),
+                                                        "idVersionOrigen",
+                                                        idV1,
+                                                        "revisionEsperada",
+                                                        1,
+                                                        "motivo",
+                                                        "Intento no autorizado",
+                                                        "confirmar",
+                                                        true))))
+                .andExpect(status().isForbidden());
+
+        // 3. Usuario ajeno al proyecto
+        String uAjeno = "ajeno_" + UUID.randomUUID().toString().substring(0, 8);
+        fixture(uAjeno);
+        var cAjeno = login(uAjeno, clave);
+
+        mvc.perform(
+                        autorizado(post("/api/modelos/" + modelo + "/restauraciones"), cAjeno)
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of(
+                                                        "idSolicitudRestauracion",
+                                                        UUID.randomUUID(),
+                                                        "idVersionOrigen",
+                                                        idV1,
+                                                        "revisionEsperada",
+                                                        1,
+                                                        "motivo",
+                                                        "Intento ajeno",
+                                                        "confirmar",
+                                                        true))))
+                .andExpect(status().isNotFound());
+
+        // 4. Usuario con rol PROPIETARIO_PROYECTO (sí tiene RESTAURAR_MODELO)
+        String uProp = "prop_" + UUID.randomUUID().toString().substring(0, 8);
+        UUID idProp = fixture(uProp);
+        miembroFixture(idProyecto, idProp, "PROPIETARIO_PROYECTO");
+        var cProp = login(uProp, clave);
+
+        mvc.perform(
+                        autorizado(post("/api/modelos/" + modelo + "/restauraciones"), cProp)
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of(
+                                                        "idSolicitudRestauracion",
+                                                        UUID.randomUUID(),
+                                                        "idVersionOrigen",
+                                                        idV1,
+                                                        "revisionEsperada",
+                                                        1,
+                                                        "motivo",
+                                                        "Restauración autorizada",
+                                                        "confirmar",
+                                                        true))))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void restauracionIdempotenciaAisladaPorModelo() throws Exception {
+        var c = login(usuario, clave);
+        var p1 = proyecto(c);
+        var p2 = proyecto(c);
+        String m1 = p1.get("idModelo").asText();
+        String m2 = p2.get("idModelo").asText();
+
+        var lista1 =
+                json.readTree(
+                        mvc.perform(autorizado(get("/api/modelos/" + m1 + "/versiones"), c))
+                                .andReturn()
+                                .getResponse()
+                                .getContentAsString());
+        var lista2 =
+                json.readTree(
+                        mvc.perform(autorizado(get("/api/modelos/" + m2 + "/versiones"), c))
+                                .andReturn()
+                                .getResponse()
+                                .getContentAsString());
+        String v1M1 = lista1.get("versiones").get(0).get("id").asText();
+        String v1M2 = lista2.get("versiones").get(0).get("id").asText();
+
+        UUID idSolicitudCompartido = UUID.randomUUID();
+
+        // Restaurar modelo 1
+        mvc.perform(
+                        autorizado(post("/api/modelos/" + m1 + "/restauraciones"), c)
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of(
+                                                        "idSolicitudRestauracion",
+                                                        idSolicitudCompartido,
+                                                        "idVersionOrigen",
+                                                        v1M1,
+                                                        "revisionEsperada",
+                                                        1,
+                                                        "motivo",
+                                                        "Restaurar m1",
+                                                        "confirmar",
+                                                        true))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.repetido").value(false));
+
+        // Reintento en modelo 1 con mismo UUID -> repetido=true
+        mvc.perform(
+                        autorizado(post("/api/modelos/" + m1 + "/restauraciones"), c)
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of(
+                                                        "idSolicitudRestauracion",
+                                                        idSolicitudCompartido,
+                                                        "idVersionOrigen",
+                                                        v1M1,
+                                                        "revisionEsperada",
+                                                        1,
+                                                        "motivo",
+                                                        "Restaurar m1",
+                                                        "confirmar",
+                                                        true))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.repetido").value(true));
+
+        // Mismo idSolicitud en modelo 2 NO devuelve la repetición del modelo 1
+        mvc.perform(
+                        autorizado(post("/api/modelos/" + m2 + "/restauraciones"), c)
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of(
+                                                        "idSolicitudRestauracion",
+                                                        idSolicitudCompartido,
+                                                        "idVersionOrigen",
+                                                        v1M2,
+                                                        "revisionEsperada",
+                                                        1,
+                                                        "motivo",
+                                                        "Restaurar m2",
+                                                        "confirmar",
+                                                        true))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.repetido").value(false));
+    }
+
+    @Test
+    void restauracionBloqueadaPorSesionEditoraActiva() throws Exception {
+        var c = login(usuario, clave);
+        var p = proyecto(c);
+        String modelo = p.get("idModelo").asText();
+        UUID idModelo = UUID.fromString(modelo);
+
+        // Crear versión 2
+        enviar(c, modelo, cambio(1, UUID.randomUUID(), clase(UUID.randomUUID(), "BloqClase")))
+                .andExpect(status().isOk());
+
+        var lista =
+                json.readTree(
+                        mvc.perform(autorizado(get("/api/modelos/" + modelo + "/versiones"), c))
+                                .andReturn()
+                                .getResponse()
+                                .getContentAsString());
+        String idV1 = null;
+        for (var v : lista.get("versiones")) {
+            if (v.get("numeroVersion").asInt() == 1) {
+                idV1 = v.get("id").asText();
+                break;
+            }
+        }
+
+        // Asegurar que hay una sesión editora de otro usuario EN_LINEA
+        String uColab = "colab_bloq_" + UUID.randomUUID().toString().substring(0, 8);
+        UUID idColab = fixture(uColab);
+        UUID idProyecto = UUID.fromString(p.get("id").asText());
+        miembroFixture(idProyecto, idColab, "EDITOR_PROYECTO");
+        var cColab = login(uColab, clave);
+        asegurarSesion(cColab, modelo);
+
+        // Previsualización debe incluir bloqueador
+        mvc.perform(
+                        autorizado(
+                                        post(
+                                                "/api/modelos/"
+                                                        + modelo
+                                                        + "/restauraciones/previsualizaciones"),
+                                        c)
+                                .contentType("application/json")
+                                .content(json.writeValueAsString(Map.of("idVersionOrigen", idV1))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.bloqueadores").isNotEmpty());
+
+        // Restauración debe fallar con 409
+        mvc.perform(
+                        autorizado(post("/api/modelos/" + modelo + "/restauraciones"), c)
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of(
+                                                        "idSolicitudRestauracion",
+                                                        UUID.randomUUID(),
+                                                        "idVersionOrigen",
+                                                        idV1,
+                                                        "revisionEsperada",
+                                                        2,
+                                                        "motivo",
+                                                        "Bloqueado",
+                                                        "confirmar",
+                                                        true))))
+                .andExpect(status().isConflict());
+
+        // Al desconectar la sesión, la restauración procede
+        jdbc.update(
+                "update uml_colaborativo.participante_sesion_modelo set salida_en=now(),"
+                    + " estado_presencia='DESCONECTADO' where id_sesion_edicion in (select id from"
+                    + " uml_colaborativo.sesion_edicion_modelo where id_modelo=?) and id_usuario=?",
+                idModelo,
+                idColab);
+
+        mvc.perform(
+                        autorizado(post("/api/modelos/" + modelo + "/restauraciones"), c)
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of(
+                                                        "idSolicitudRestauracion",
+                                                        UUID.randomUUID(),
+                                                        "idVersionOrigen",
+                                                        idV1,
+                                                        "revisionEsperada",
+                                                        2,
+                                                        "motivo",
+                                                        "Desbloqueado",
+                                                        "confirmar",
+                                                        true))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.revision").value(3));
+    }
+
+    @Test
+    void exportacionXmiYDescarga() throws Exception {
+        var c = login(usuario, clave);
+        var p = proyecto(c);
+        String modelo = p.get("idModelo").asText();
+        UUID idClase1 = UUID.randomUUID();
+        UUID idClase2 = UUID.randomUUID();
+
+        enviar(
+                        c,
+                        modelo,
+                        cambio(
+                                1,
+                                UUID.randomUUID(),
+                                clase(idClase1, "Producto"),
+                                clase(idClase2, "Categoria")))
+                .andExpect(status().isOk());
+
+        // Exportar XMI
+        var resExport =
+                respuesta(
+                        mvc.perform(
+                                        autorizado(
+                                                        post(
+                                                                "/api/modelos/"
+                                                                        + modelo
+                                                                        + "/xmi/exportar"),
+                                                        c)
+                                                .contentType("application/json")
+                                                .content(
+                                                        json.writeValueAsString(
+                                                                Map.of(
+                                                                        "idSolicitud",
+                                                                        UUID.randomUUID(),
+                                                                        "descripcion",
+                                                                        "Exportacion para"
+                                                                                + " Enterprise"
+                                                                                + " Architect"))))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.idIntercambio").isNotEmpty())
+                                .andExpect(jsonPath("$.idArchivoSalida").isNotEmpty())
+                                .andExpect(
+                                        jsonPath("$.nombreArchivo")
+                                                .value(Matchers.endsWith(".xmi")))
+                                .andExpect(jsonPath("$.totalClases").value(2)));
+
+        String idIntercambio = resExport.get("idIntercambio").asText();
+
+        // Descargar XMI
+        var resDescarga =
+                mvc.perform(
+                                autorizado(
+                                        get(
+                                                "/api/modelos/"
+                                                        + modelo
+                                                        + "/xmi/"
+                                                        + idIntercambio
+                                                        + "/descargar"),
+                                        c))
+                        .andExpect(status().isOk())
+                        .andExpect(
+                                header().string(
+                                                "Content-Type",
+                                                Matchers.containsString("application/xml")))
+                        .andExpect(
+                                header().string(
+                                                "Content-Disposition",
+                                                Matchers.containsString("attachment")))
+                        .andReturn()
+                        .getResponse();
+
+        String xml = resDescarga.getContentAsString();
+        assertThat(xml)
+                .contains("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
+                .contains("<xmi:XMI")
+                .contains("name=\"Producto\"")
+                .contains("name=\"Categoria\"");
+    }
+
+    @Test
+    void configuracionYGeneracionBackendYDescarga() throws Exception {
+        var c = login(usuario, clave);
+        var p = proyecto(c);
+        String modelo = p.get("idModelo").asText();
+        UUID idClase = UUID.randomUUID();
+
+        enviar(c, modelo, cambio(1, UUID.randomUUID(), clase(idClase, "Usuario")))
+                .andExpect(status().isOk());
+
+        // 1. Leer configuración por defecto (200 OK)
+        mvc.perform(autorizado(get("/api/modelos/" + modelo + "/generacion/configuracion"), c))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.idGrupo").value("com.empresa"))
+                .andExpect(jsonPath("$.generarRepositorios").value(true));
+
+        // 2. Guardar configuración personalizada
+        mvc.perform(
+                        autorizado(put("/api/modelos/" + modelo + "/generacion/configuracion"), c)
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of(
+                                                        "nombre", "Backend Académico",
+                                                        "nombreProyecto", "proyecto-academico",
+                                                        "idGrupo", "bo.edu.uml",
+                                                        "idArtefacto", "proyecto-academico",
+                                                        "paqueteBase", "bo.edu.uml.academico",
+                                                        "versionInicial", "1.0.0-SNAPSHOT",
+                                                        "generarRepositorios", true,
+                                                        "generarControladores", true,
+                                                        "generarDtos", true,
+                                                        "exponerRest", true))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.idGrupo").value("bo.edu.uml"))
+                .andExpect(jsonPath("$.paqueteBase").value("bo.edu.uml.academico"));
+
+        // 3. Generar backend Spring Boot en ZIP
+        var resGen =
+                respuesta(
+                        mvc.perform(
+                                        autorizado(
+                                                post(
+                                                        "/api/modelos/"
+                                                                + modelo
+                                                                + "/generacion/generar"),
+                                                c))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.idGeneracion").isNotEmpty())
+                                .andExpect(jsonPath("$.idArchivoSalida").isNotEmpty())
+                                .andExpect(
+                                        jsonPath("$.nombreArchivo")
+                                                .value("proyecto-academico-generated.zip"))
+                                .andExpect(jsonPath("$.totalClases").value(1)));
+
+        String idGeneracion = resGen.get("idGeneracion").asText();
+
+        // 4. Descargar ZIP generado
+        var resDescarga =
+                mvc.perform(
+                                autorizado(
+                                        get(
+                                                "/api/modelos/"
+                                                        + modelo
+                                                        + "/generacion/"
+                                                        + idGeneracion
+                                                        + "/descargar"),
+                                        c))
+                        .andExpect(status().isOk())
+                        .andExpect(
+                                header().string(
+                                                "Content-Type",
+                                                Matchers.containsString("application/zip")))
+                        .andExpect(
+                                header().string(
+                                                "Content-Disposition",
+                                                Matchers.containsString("attachment")))
+                        .andReturn()
+                        .getResponse();
+
+        byte[] bytes = resDescarga.getContentAsByteArray();
+        assertThat(bytes).isNotEmpty();
+        // Magic bytes del formato ZIP: PK\x03\x04
+        assertThat(bytes[0]).isEqualTo((byte) 0x50);
+        assertThat(bytes[1]).isEqualTo((byte) 0x4B);
+    }
+
+    @Test
+    void permisosXmiYGeneracionRechazadosParaUsuariosSinRol() throws Exception {
+        var adminCliente = login(usuario, clave);
+        var p = proyecto(adminCliente);
+        String modelo = p.get("idModelo").asText();
+
+        // Crear usuario sin membresía
+        String otroUser = "ajeno_" + UUID.randomUUID().toString().substring(0, 8);
+        fixture(otroUser);
+        var clienteAjeno = login(otroUser, clave);
+
+        // Exportación XMI debe fallar con 403
+        mvc.perform(
+                        autorizado(post("/api/modelos/" + modelo + "/xmi/exportar"), clienteAjeno)
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of(
+                                                        "idSolicitud",
+                                                        UUID.randomUUID(),
+                                                        "descripcion",
+                                                        "Intento ajeno"))))
+                .andExpect(status().isForbidden());
+
+        // Generación debe fallar con 403
+        mvc.perform(
+                        autorizado(
+                                post("/api/modelos/" + modelo + "/generacion/generar"),
+                                clienteAjeno))
+                .andExpect(status().isForbidden());
     }
 }

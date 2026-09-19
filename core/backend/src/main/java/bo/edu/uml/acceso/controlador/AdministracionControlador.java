@@ -1,5 +1,6 @@
 package bo.edu.uml.acceso.controlador;
 
+import bo.edu.uml.acceso.dto.AccesoDto.PaginaSesiones;
 import bo.edu.uml.acceso.dto.AdministracionDto.*;
 import bo.edu.uml.acceso.modelo.Identidad;
 import bo.edu.uml.acceso.servicio.AdministracionServicio;
@@ -82,5 +83,15 @@ public class AdministracionControlador {
             @PathVariable UUID id,
             @Valid @RequestBody Rol d) {
         return servicio.guardarRol(a, id, d, false);
+    }
+
+    /** CU02 — Historial de sesiones de un usuario específico (solo administradores). */
+    @GetMapping("/usuarios/{id}/sesiones")
+    PaginaSesiones sesionesUsuario(
+            @AuthenticationPrincipal Identidad a,
+            @PathVariable UUID id,
+            @RequestParam(defaultValue = "0") @Min(0) @Max(10000) int pagina,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int tamano) {
+        return servicio.sesionesUsuario(a, id, pagina, tamano);
     }
 }

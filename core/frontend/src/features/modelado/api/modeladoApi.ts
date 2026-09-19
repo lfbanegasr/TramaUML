@@ -74,6 +74,7 @@ export type Modelo = {
   puedeEditar: boolean;
   puedeOrganizar: boolean;
   puedeValidar: boolean;
+  puedeRestaurar: boolean;
   clases: Clase[];
   atributos: Atributo[];
   operaciones: Operacion[];

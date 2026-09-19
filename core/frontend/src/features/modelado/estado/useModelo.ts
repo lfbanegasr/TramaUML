@@ -39,6 +39,8 @@ export function useModelo(id: string) {
     cargaRemota = useRef(false),
     solicitudRef = useRef(crypto.randomUUID()),
     salirRef = useRef<() => Promise<void>>(async () => {}),
+    pausarRef = useRef<() => Promise<boolean>>(async () => true),
+    reanudarRef = useRef<() => Promise<boolean>>(async () => true),
     enfocarRef = useRef<(tipo: string | null, entidad: string | null) => void>(() => {});
 
   useEffect(() => {
@@ -141,7 +143,7 @@ export function useModelo(id: string) {
       };
       canal.onclose = () => {
         window.clearInterval(pulso);
-        if (!vivo) return;
+        if (!vivo || pausado) return;
         setColaboracion('LIMITADO');
         setError(
           'Colaboración interrumpida. El modelo queda sin nuevas ediciones mientras reconectamos.',
@@ -161,24 +163,80 @@ export function useModelo(id: string) {
       };
     }
 
+    let pausado = false;
+
     async function iniciar() {
       try {
         const abierta = await abrirSesion(id, solicitud);
-        if (!vivo) return;
+        if (!vivo || pausado) return;
         sesionRef.current = abierta;
         setSesion(abierta);
         const actual = await leerModelo(id);
-        if (!vivo) return;
+        if (!vivo || pausado) return;
         modeloRef.current = actual;
         setModelo(actual);
         conectarCanal(abierta);
       } catch (e) {
-        if (vivo) {
+        if (vivo && !pausado) {
           setColaboracion('LIMITADO');
           setError((e as Error).message);
         }
       }
     }
+
+    pausarRef.current = async () => {
+      if (borradorRef.current || pendienteRef.current || enviandoRef.current) {
+        return false;
+      }
+      pausado = true;
+      window.clearTimeout(temporizador);
+      window.clearInterval(pulso);
+      if (socket.current) {
+        socket.current.onclose = null;
+        socket.current.onerror = null;
+        socket.current.close(1000, 'Pausa para restauración');
+        socket.current = null;
+      }
+      const actual = sesionRef.current;
+      if (actual && actual.estado === 'ACTIVO') {
+        try {
+          await cerrarSesion(id, actual.id);
+        } catch (e) {
+          if (!(e instanceof ApiError) || ![401, 403, 404, 409].includes(e.status)) {
+            console.warn('Error al cerrar sesión para restauración:', e);
+          }
+        }
+      }
+      sesionRef.current = null;
+      setSesion(null);
+      setColaboracion('LIMITADO');
+      return true;
+    };
+
+    reanudarRef.current = async () => {
+      if (!vivo) return false;
+      pausado = false;
+      try {
+        solicitudRef.current = crypto.randomUUID();
+        const abierta = await abrirSesion(id, solicitudRef.current);
+        if (pausado || !vivo) return false;
+        sesionRef.current = abierta;
+        setSesion(abierta);
+        conectarCanal(abierta);
+        const actual = await leerModelo(id);
+        if (!pausado && vivo) {
+          modeloRef.current = actual;
+          setModelo(actual);
+        }
+        return true;
+      } catch (e) {
+        if (!pausado && vivo) {
+          setColaboracion('LIMITADO');
+          setError((e as Error).message);
+        }
+        return false;
+      }
+    };
 
     salirRef.current = async () => {
       const actual = sesionRef.current;
@@ -221,7 +279,7 @@ export function useModelo(id: string) {
       setConflicto(false);
       setPendiente(null);
       setDesactualizado(false);
-      setMensaje('Modelo actualizado');
+      setMensaje('Modelo actualizado · revisión ' + actual.revision);
       return true;
     } catch (e) {
       setError((e as Error).message);
@@ -308,6 +366,8 @@ export function useModelo(id: string) {
     cambiar,
     reintentar: () => pendiente && enviar(pendiente),
     salir: () => salirRef.current(),
+    pausarSesion: () => pausarRef.current(),
+    reanudarSesion: () => reanudarRef.current(),
     enfocar: (tipo: string | null, entidad: string | null) => enfocarRef.current(tipo, entidad),
     registrarBorrador,
     senalConflictos,

@@ -1,4 +1,4 @@
-﻿param(
+param(
     [string]$PostgresBin = 'C:\Program Files\PostgreSQL\18\bin',
     [int]$Puerto = 55433,
     [ValidateSet('postgres','postgres17')][string]$NombreCluster = 'postgres',
@@ -27,10 +27,22 @@ try { $portAvailable = $tcpProbe.ConnectAsync('127.0.0.1',$Puerto).Wait(1500) -a
 catch { $portAvailable = $false }
 finally { $tcpProbe.Dispose() }
 if (-not $portAvailable) {
+    $pidFile = Join-Path $clusterRoot 'data\postmaster.pid'
+    if (Test-Path -LiteralPath $pidFile) {
+        $pidLines = Get-Content -LiteralPath $pidFile -ErrorAction SilentlyContinue
+        if ($pidLines -and $pidLines.Count -gt 0) {
+            $oldPid = 0
+            if ([int]::TryParse($pidLines[0], [ref]$oldPid) -and $oldPid -gt 0) {
+                if (-not (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
+                    Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
+    }
     $pgProcess = Start-Process -FilePath (Join-Path $PostgresBin 'pg_ctl.exe') -ArgumentList @(
-        '-D','data','-l','server.log','-o',('"-p '+$Puerto+' -h 127.0.0.1"'),'start','-w','-t','30'
-    ) -WorkingDirectory $clusterRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $clusterRoot 'inicio.stdout.log') -RedirectStandardError (Join-Path $clusterRoot 'inicio.stderr.log')
-    if (-not $pgProcess.WaitForExit(40000) -or $pgProcess.ExitCode -ne 0) { throw 'No inició PostgreSQL aislado; revisa .qa/postgres/server.log.' }
+        '-D','data','-l','server.log','-o',('"-p '+$Puerto+' -h 127.0.0.1"'),'start','-w','-t','90'
+    ) -WorkingDirectory $clusterRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $clusterRoot 'inicio.stdout.log') -RedirectStandardError (Join-Path $clusterRoot 'inicio.stderr.log') -Wait
+    if ($pgProcess.ExitCode -ne 0) { throw 'No inició PostgreSQL aislado; revisa .qa/postgres/server.log.' }
 }
 $actualCluster = & (Join-Path $PostgresBin 'psql.exe') -X -At -h 127.0.0.1 -p $Puerto -U uml_test_owner -d postgres -c 'show data_directory'
 if ($LASTEXITCODE -ne 0 -or [IO.Path]::GetFullPath($actualCluster.Trim()) -ne [IO.Path]::GetFullPath((Join-Path $clusterRoot 'data'))) {
@@ -40,15 +52,29 @@ $testDatabase = 'uml_collab_test_' + [Guid]::NewGuid().ToString('N').Substring(0
 Invoke-Pg 'createdb.exe' @('-h','127.0.0.1','-p',"$Puerto",'-U','uml_test_owner',$testDatabase)
 $installationLog = Join-Path $implementationRoot ('.qa\'+$testDatabase+'_instalacion.log')
 foreach ($sqlSource in @('2026-09-12_00_cuenta_aplicacion.sql','2026-09-12_16_esquema_espanol.sql','2026-09-12_17_catalogos_espanol.sql','2026-09-13_18_correcciones_desarrollo.sql')) {
-    & (Join-Path $PostgresBin 'psql.exe') -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -p $Puerto -U uml_test_owner -d $testDatabase -f (Join-Path $implementationRoot ('database\'+$sqlSource)) *>> $installationLog
-    if ($LASTEXITCODE -ne 0) { throw "Falló la instalación de $sqlSource; revisa $installationLog." }
+    Invoke-Pg 'psql.exe' @('-X','-v','ON_ERROR_STOP=1','-h','127.0.0.1','-p',"$Puerto",'-U','uml_test_owner','-d',$testDatabase,'-f',(Join-Path $implementationRoot ('database\'+$sqlSource)))
 }
 Invoke-Pg 'psql.exe' @('-X','-v','ON_ERROR_STOP=1','-h','127.0.0.1','-p',"$Puerto",'-U','uml_test_owner','-d',$testDatabase,'-f',(Join-Path $implementationRoot 'core\docs\migraciones\2026-09-14_01_revocacion_permisos_rol.sql'))
 Invoke-Pg 'psql.exe' @('-X','-v','ON_ERROR_STOP=1','-h','127.0.0.1','-p',"$Puerto",'-U','uml_test_owner','-d',$testDatabase,'-f',(Join-Path $implementationRoot 'core\docs\migraciones\2026-09-15_02_resolucion_conflictos.sql'))
+Invoke-Pg 'psql.exe' @('-X','-v','ON_ERROR_STOP=1','-h','127.0.0.1','-p',"$Puerto",'-U','uml_test_owner','-d',$testDatabase,'-f',(Join-Path $implementationRoot 'core\docs\migraciones\2026-09-15_03_historial_permisos.sql'))
+Invoke-Pg 'psql.exe' @('-X','-v','ON_ERROR_STOP=1','-h','127.0.0.1','-p',"$Puerto",'-U','uml_test_owner','-d',$testDatabase,'-f',(Join-Path $implementationRoot 'core\docs\migraciones\2026-09-18_04_xmi_generacion_permisos.sql'))
 $env:UML_TEST_DB_URL = "jdbc:postgresql://127.0.0.1:$Puerto/$testDatabase" + '?currentSchema=uml_colaborativo,public'
 Invoke-Pg 'psql.exe' @('-X','-v','ON_ERROR_STOP=1','-h','127.0.0.1','-p',"$Puerto",'-U','uml_test_owner','-d',$testDatabase,'-c','ALTER ROLE uml_app LOGIN')
 Write-Output "Base ficticia preparada: $testDatabase (127.0.0.1:$Puerto). Se conserva para inspección."
 if (-not $SoloPreparar) {
+    if ($Maven -eq 'mvn') {
+        $mvnLocal = Join-Path $implementationRoot '.qa\tools\apache-maven-3.9.9\bin\mvn.cmd'
+        if (Test-Path -LiteralPath $mvnLocal) { $Maven = $mvnLocal }
+    }
+    if (-not $env:JAVA_HOME -or -not (Test-Path -LiteralPath (Join-Path $env:JAVA_HOME 'bin\java.exe'))) {
+        foreach ($ubicacionJava in @(
+            'C:\Program Files\Android\Android Studio\jbr',
+            'D:\Android Studio Instalacion 2025\jbr',
+            'D:\Program Files\Android\Android Studio\jbr'
+        )) {
+            if (Test-Path -LiteralPath (Join-Path $ubicacionJava 'bin\java.exe')) { $env:JAVA_HOME = $ubicacionJava; break }
+        }
+    }
     Push-Location (Join-Path $implementationRoot 'core\backend')
     try {
         & $Maven '-Dmaven.repo.local=../../.qa/maven-repository' test

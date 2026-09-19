@@ -18,6 +18,9 @@ import { simbolo, multiplicidad, type Accion } from '../api/modeladoApi';
 import { InformeValidacion } from '../../validacion/components/InformeValidacion';
 import { ConflictosPanel } from '../../colaboracion/components/ConflictosPanel';
 import { listarConflictos } from '../../colaboracion/api/conflictosApi';
+import { HistorialPage } from '../../historial/pages/HistorialPage';
+import { ExportarXmiDialog } from '../../interoperabilidad/components/ExportarXmiDialog';
+import { GenerarBackendDialog } from '../../interoperabilidad/components/GenerarBackendDialog';
 const nodeTypes = { clase: ClaseNode },
   edgeTypes = { uml: RelacionEdge };
 export function EditorPage({
@@ -39,6 +42,9 @@ export function EditorPage({
   const [mostrarConflictos, setMostrarConflictos] = useState(false);
   const [totalConflictos, setTotalConflictos] = useState(0);
   const cambiarTotalConflictos = useCallback((total: number) => setTotalConflictos(total), []);
+  const [verHistorial, setVerHistorial] = useState(false);
+  const [verExportarXmi, setVerExportarXmi] = useState(false);
+  const [verGenerarBackend, setVerGenerarBackend] = useState(false);
   const flujo = useRef<ReactFlowInstance<ClaseNodo, RelacionArista> | null>(null);
   const finalizarRef = useRef(m.salir),
     enfocarRef = useRef(m.enfocar);
@@ -194,6 +200,28 @@ export function EditorPage({
         {m.error && <button onClick={m.recargar}>Reintentar consulta</button>}
       </div>
     );
+  if (verHistorial && m.modelo) {
+    return (
+      <HistorialPage
+        modelo={m.modelo.id}
+        revisionVigente={m.modelo.revision}
+        versionVigente={m.modelo.idVersion}
+        puedeRestaurar={m.modelo.puedeRestaurar}
+        volver={async () => {
+          setVerHistorial(false);
+          await m.reanudarSesion();
+        }}
+        prepararRestauracion={async () => {
+          return await m.pausarSesion();
+        }}
+        alRestaurar={async () => {
+          setVerHistorial(false);
+          await m.reanudarSesion();
+          await m.recargar();
+        }}
+      />
+    );
+  }
   return (
     <div className="editor">
       <div className="editor-heading">
@@ -218,7 +246,24 @@ export function EditorPage({
           >
             Conflictos {totalConflictos ? '(' + totalConflictos + ')' : ''}
           </button>
+          <button id="btn-historial" onClick={() => setVerHistorial(true)}>
+            Historial
+          </button>
           <button onClick={() => setInforme((v) => !v)}>Informe de validación</button>
+          <button
+            id="btn-exportar-xmi"
+            onClick={() => setVerExportarXmi(true)}
+            disabled={!!borrador}
+          >
+            Exportar XMI
+          </button>
+          <button
+            id="btn-generar-backend"
+            onClick={() => setVerGenerarBackend(true)}
+            disabled={!!borrador}
+          >
+            Generar Backend
+          </button>
           {puedeOrganizar && (
             <button
               disabled={bloqueado || !!borrador}
@@ -315,6 +360,20 @@ export function EditorPage({
           cerrar={() => setMostrarConflictos(false)}
           cambiarTotal={cambiarTotalConflictos}
           resuelto={m.recargar}
+        />
+      )}
+      {verExportarXmi && (
+        <ExportarXmiDialog
+          modelo={m.modelo.id}
+          nombreModelo={m.modelo.nombre}
+          cerrar={() => setVerExportarXmi(false)}
+        />
+      )}
+      {verGenerarBackend && (
+        <GenerarBackendDialog
+          modelo={m.modelo.id}
+          nombreModelo={m.modelo.nombre}
+          cerrar={() => setVerGenerarBackend(false)}
         />
       )}
       <div className="editor-body">
