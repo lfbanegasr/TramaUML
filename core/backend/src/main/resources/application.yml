@@ -23,6 +23,9 @@ server:
     include-stacktrace: never
 uml:
   cookie-secure: ${UML_COOKIE_SECURE:true}
+  servicios:
+    clave-maestra: ${UML_SERVICIOS_MASTER_KEY:}
+    version-clave: ${UML_SERVICIOS_KEY_VERSION:v1}
   ia:
     proveedor: ${UML_IA_PROVEEDOR:LOCAL}
     clave: ${UML_IA_CLAVE:}

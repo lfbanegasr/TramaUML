@@ -7,10 +7,10 @@ param(
 $ErrorActionPreference='Stop'
 $implementationRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
 $coreRoot=Join-Path $implementationRoot 'core'
-$jar=Join-Path $coreRoot 'backend\target\plataforma-0.10.0-SNAPSHOT.jar'
+$jar=Join-Path $coreRoot 'backend\target\plataforma-0.11.0-SNAPSHOT.jar'
 if(-not (Test-Path -LiteralPath $jar)) {throw 'Primero empaqueta el backend.'}
 if($PuertoBackend -eq 8080 -or $PuertoWeb -eq 5173 -or $PuertoBackend -eq $PuertoWeb) {throw 'Utiliza puertos exclusivos para pruebas.'}
-$envNames=@('UML_DB_URL','UML_DB_USER','UML_DB_PASSWORD','UML_COOKIE_SECURE','UML_BOOTSTRAP_ENABLED','UML_ADMIN_USERNAME','UML_ADMIN_EMAIL','UML_ADMIN_NAME','UML_ADMIN_PASSWORD','UML_PORT','UML_API_PROXY_TARGET','UML_E2E_URL','UML_E2E_USERNAME','UML_E2E_PASSWORD','UML_TEST_DB_URL','UML_TEST_DB_PASSWORD','PGPASSWORD','PGCONNECT_TIMEOUT','JAVA_HOME')
+$envNames=@('UML_DB_URL','UML_DB_USER','UML_DB_PASSWORD','UML_COOKIE_SECURE','UML_BOOTSTRAP_ENABLED','UML_ADMIN_USERNAME','UML_ADMIN_EMAIL','UML_ADMIN_NAME','UML_ADMIN_PASSWORD','UML_PORT','UML_API_PROXY_TARGET','UML_E2E_URL','UML_E2E_USERNAME','UML_E2E_PASSWORD','UML_TEST_DB_URL','UML_TEST_DB_PASSWORD','UML_SERVICIOS_MASTER_KEY','UML_SERVICIOS_KEY_VERSION','PGPASSWORD','PGCONNECT_TIMEOUT','JAVA_HOME')
 $previousEnvironment=@{}
 foreach($envName in $envNames) {$previousEnvironment[$envName]=[Environment]::GetEnvironmentVariable($envName,'Process')}
 $backendProcess=$null;$webProcess=$null
@@ -31,6 +31,8 @@ try {
     $env:UML_ADMIN_EMAIL=$env:UML_ADMIN_USERNAME+'@example.test';$env:UML_ADMIN_NAME='Administrador ficticio'
     $env:UML_ADMIN_PASSWORD=[Guid]::NewGuid().ToString()
     $env:UML_E2E_USERNAME=$env:UML_ADMIN_USERNAME;$env:UML_E2E_PASSWORD=$env:UML_ADMIN_PASSWORD
+    $env:UML_SERVICIOS_MASTER_KEY='MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY='
+    $env:UML_SERVICIOS_KEY_VERSION='pruebas-e2e-v1'
     $env:UML_BOOTSTRAP_ENABLED='true'
     $java=$null
     if($JavaHome -and (Test-Path -LiteralPath (Join-Path $JavaHome 'bin\java.exe'))) { $java = Join-Path $JavaHome 'bin\java.exe' }

@@ -41,7 +41,9 @@ import javax.imageio.ImageIO;
             "spring.datasource.password=${UML_TEST_DB_PASSWORD}",
             "uml.cookie-secure=false",
             "uml.bootstrap.enabled=false",
-            "uml.validacion.worker=false"
+            "uml.validacion.worker=false",
+            "uml.servicios.clave-maestra=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+            "uml.servicios.version-clave=pruebas-v1"
         })
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class NucleoIntegracionTest {
@@ -948,6 +950,309 @@ class NucleoIntegracionTest {
         assertThat(permisosRol("LECTOR_PROYECTO"))
                 .contains("VER_HISTORIAL_MODELO")
                 .doesNotContain("RESTAURAR_MODELO", "EXPORTAR_XMI", "GENERAR_BACKEND");
+    }
+
+    @Test
+    void serviciosPlataformaProtegenRotanYNoExponenCredenciales() throws Exception {
+        var administrador = login(usuario, clave);
+        String sufijo = UUID.randomUUID().toString().substring(0, 8);
+        String credencialInicial = "credencial-inicial-" + sufijo;
+        var datos =
+                new HashMap<String, Object>(
+                        Map.of(
+                                "nombre",
+                                "Motor local " + sufijo,
+                                "proveedor",
+                                "LOCAL",
+                                "tipoServicio",
+                                "IA_TEXTO",
+                                "urlServicio",
+                                "",
+                                "configuracion",
+                                Map.of(),
+                                "credencial",
+                                credencialInicial,
+                                "retirarCredencial",
+                                false));
+        var creado =
+                respuesta(
+                        escribir(administrador, post("/api/administracion/servicios"), datos)
+                                .andExpect(status().isCreated())
+                                .andExpect(jsonPath("$.estado").value("ACTIVO"))
+                                .andExpect(jsonPath("$.tieneCredencial").value(true))
+                                .andExpect(
+                                        jsonPath("$.ultimaComprobacion.estado")
+                                                .value("DISPONIBLE")));
+        UUID servicio = UUID.fromString(creado.get("id").asText());
+        assertThat(creado.toString()).doesNotContain(credencialInicial);
+        byte[] contenidoInicial =
+                jdbc.queryForObject(
+                        "select contenido_cifrado from uml_colaborativo.secreto_servicio where"
+                                + " id_servicio=? and retirado_en is null",
+                        byte[].class,
+                        servicio);
+        assertThat(new String(contenidoInicial, java.nio.charset.StandardCharsets.ISO_8859_1))
+                .doesNotContain(credencialInicial);
+        assertThat(
+                        jdbc.queryForObject(
+                                "select algoritmo_cifrado from"
+                                        + " uml_colaborativo.secreto_servicio where id_servicio=?"
+                                        + " and retirado_en is null",
+                                String.class,
+                                servicio))
+                .isEqualTo("AES-256-GCM");
+
+        mvc.perform(
+                        autorizado(
+                                get("/api/administracion/servicios")
+                                        .param("nombre", sufijo)
+                                        .param("proveedor", "LOCAL")
+                                        .param("tipo", "IA_TEXTO")
+                                        .param("estado", "ACTIVO"),
+                                administrador))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.servicios[0].id").value(servicio.toString()));
+
+        escribir(administrador, post("/api/administracion/servicios"), datos)
+                .andExpect(status().isConflict());
+
+        String credencialRotada = "credencial-rotada-" + sufijo;
+        datos.put("nombre", "Motor local actualizado " + sufijo);
+        datos.put("credencial", credencialRotada);
+        datos.put("revision", creado.get("revision").asText());
+        var actualizado =
+                respuesta(
+                        escribir(
+                                        administrador,
+                                        put("/api/administracion/servicios/" + servicio),
+                                        datos)
+                                .andExpect(status().isOk()));
+        assertThat(actualizado.toString())
+                .doesNotContain(credencialInicial)
+                .doesNotContain(credencialRotada);
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from uml_colaborativo.secreto_servicio where"
+                                        + " id_servicio=? and retirado_en is not null and"
+                                        + " rotado_en is not null",
+                                Long.class,
+                                servicio))
+                .isEqualTo(1);
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from uml_colaborativo.secreto_servicio where"
+                                        + " id_servicio=? and retirado_en is null",
+                                Long.class,
+                                servicio))
+                .isEqualTo(1);
+
+        escribir(
+                        administrador,
+                        post("/api/administracion/servicios/" + servicio + "/estado"),
+                        Map.of(
+                                "estado",
+                                "INACTIVO",
+                                "revision",
+                                actualizado.get("revision").asText(),
+                                "confirmarImpacto",
+                                false))
+                .andExpect(status().isConflict());
+        var inactivo =
+                respuesta(
+                        escribir(
+                                        administrador,
+                                        post(
+                                                "/api/administracion/servicios/"
+                                                        + servicio
+                                                        + "/estado"),
+                                        Map.of(
+                                                "estado",
+                                                "INACTIVO",
+                                                "revision",
+                                                actualizado.get("revision").asText(),
+                                                "confirmarImpacto",
+                                                true))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.estado").value("INACTIVO")));
+        var comprobado =
+                respuesta(
+                        escribir(
+                                        administrador,
+                                        post(
+                                                "/api/administracion/servicios/"
+                                                        + servicio
+                                                        + "/verificar"),
+                                        Map.of())
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.estado").value("INACTIVO")));
+        escribir(
+                        administrador,
+                        post("/api/administracion/servicios/" + servicio + "/estado"),
+                        Map.of(
+                                "estado",
+                                "ACTIVO",
+                                "revision",
+                                comprobado.get("revision").asText(),
+                                "confirmarImpacto",
+                                false))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.estado").value("ACTIVO"));
+
+        datos.put("revision", creado.get("revision").asText());
+        escribir(administrador, put("/api/administracion/servicios/" + servicio), datos)
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void serviciosPlataformaExigenPermisoCsrfYConfiguracionNoSensible() throws Exception {
+        var administrador = login(usuario, clave);
+        String nombre = "servicio_seguro_" + UUID.randomUUID().toString().substring(0, 8);
+        UUID usuarioComun =
+                fixture("sin_servicios_" + UUID.randomUUID().toString().substring(0, 8));
+        var comun =
+                login(
+                        jdbc.queryForObject(
+                                "select nombre_usuario from uml_colaborativo.usuario where id=?",
+                                String.class,
+                                usuarioComun),
+                        clave);
+        mvc.perform(autorizado(get("/api/administracion/servicios"), comun))
+                .andExpect(status().isForbidden());
+
+        var sensible =
+                Map.of(
+                        "nombre",
+                        nombre,
+                        "proveedor",
+                        "LOCAL",
+                        "tipoServicio",
+                        "IA_IMAGEN",
+                        "urlServicio",
+                        "",
+                        "configuracion",
+                        Map.of("apiKey", "no-debe-guardarse"),
+                        "retirarCredencial",
+                        false);
+        escribir(administrador, post("/api/administracion/servicios"), sensible)
+                .andExpect(status().isUnprocessableEntity());
+
+        var privada =
+                Map.of(
+                        "nombre",
+                        nombre,
+                        "proveedor",
+                        "OPENAI",
+                        "tipoServicio",
+                        "IA_TEXTO",
+                        "urlServicio",
+                        "https://127.0.0.1:8443/prueba",
+                        "configuracion",
+                        Map.of("modelo", "modelo-ficticio"),
+                        "retirarCredencial",
+                        false);
+        escribir(administrador, post("/api/administracion/servicios"), privada)
+                .andExpect(status().isUnprocessableEntity());
+
+        var noDisponible =
+                Map.of(
+                        "nombre",
+                        nombre + " externo",
+                        "proveedor",
+                        "OPENAI",
+                        "tipoServicio",
+                        "IA_TEXTO",
+                        "urlServicio",
+                        "https://proveedor-inexistente.invalid/prueba",
+                        "configuracion",
+                        Map.of("modelo", "modelo-ficticio"),
+                        "retirarCredencial",
+                        false);
+        escribir(administrador, post("/api/administracion/servicios"), noDisponible)
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.estado").value("SIN_VERIFICAR"))
+                .andExpect(jsonPath("$.ultimaComprobacion.estado").value("NO_DISPONIBLE"));
+
+        mvc.perform(
+                        post("/api/administracion/servicios")
+                                .cookie(administrador.sesion())
+                                .contentType("application/json")
+                                .content(json.writeValueAsString(sensible)))
+                .andExpect(status().isForbidden());
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from uml_colaborativo.servicio_plataforma where"
+                                        + " nombre=?",
+                                Long.class,
+                                nombre))
+                .isZero();
+    }
+
+    @Test
+    void unServicioEnUsoNoPuedeDesactivarse() throws Exception {
+        var administrador = login(usuario, clave);
+        String sufijo = UUID.randomUUID().toString().substring(0, 8);
+        var creado =
+                respuesta(
+                        escribir(
+                                        administrador,
+                                        post("/api/administracion/servicios"),
+                                        Map.of(
+                                                "nombre",
+                                                "Servicio en uso " + sufijo,
+                                                "proveedor",
+                                                "LOCAL",
+                                                "tipoServicio",
+                                                "IA_TEXTO",
+                                                "urlServicio",
+                                                "",
+                                                "configuracion",
+                                                Map.of("perfilPrueba", sufijo),
+                                                "retirarCredencial",
+                                                false))
+                                .andExpect(status().isCreated()));
+        UUID servicio = UUID.fromString(creado.get("id").asText());
+        String modelo = proyecto(administrador).get("idModelo").asText();
+        UUID solicitud = UUID.randomUUID();
+        jdbc.update(
+                """
+                insert into uml_colaborativo.solicitud_inteligente
+                  (id,id_modelo,solicitado_por,id_servicio,tipo_entrada,texto_original,revision_base,estado)
+                values(?,?,?,?,?,?,?,'PROCESANDO')
+                """,
+                solicitud,
+                UUID.fromString(modelo),
+                admin,
+                servicio,
+                "TEXTO",
+                "Solicitud ficticia en curso",
+                0L);
+        escribir(
+                        administrador,
+                        post("/api/administracion/servicios/" + servicio + "/estado"),
+                        Map.of(
+                                "estado",
+                                "INACTIVO",
+                                "revision",
+                                creado.get("revision").asText(),
+                                "confirmarImpacto",
+                                true))
+                .andExpect(status().isConflict());
+        jdbc.update(
+                "update uml_colaborativo.solicitud_inteligente set estado='CANCELADO',"
+                        + " completado_en=clock_timestamp() where id=?",
+                solicitud);
+        escribir(
+                        administrador,
+                        post("/api/administracion/servicios/" + servicio + "/estado"),
+                        Map.of(
+                                "estado",
+                                "INACTIVO",
+                                "revision",
+                                creado.get("revision").asText(),
+                                "confirmarImpacto",
+                                true))
+                .andExpect(status().isOk());
     }
 
     private Map<String, Object> datosMiembro(

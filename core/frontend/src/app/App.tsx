@@ -78,7 +78,7 @@ export function App() {
         </button>
         {(sesion.usuario.rolesGlobales.includes('SUPERADMINISTRADOR') ||
           sesion.usuario.permisosGlobales.some((p) =>
-            ['GESTIONAR_USUARIOS', 'GESTIONAR_ROLES'].includes(p),
+            ['GESTIONAR_USUARIOS', 'GESTIONAR_ROLES', 'CONFIGURAR_SERVICIOS'].includes(p),
           )) && (
           <button
             className={administracion ? 'nav-item selected' : 'nav-item'}

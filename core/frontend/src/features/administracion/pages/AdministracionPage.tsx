@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import * as api from '../api/administracionApi';
 import { UsuarioForm } from '../components/UsuarioForm';
 import { RolForm } from '../components/RolForm';
+import { ServiciosPanel } from '../components/ServiciosPanel';
 import { useSesion } from '../../acceso/estado/SesionProvider';
 
 export function AdministracionPage({
@@ -14,7 +15,8 @@ export function AdministracionPage({
   const superadmin = sesion?.usuario.rolesGlobales.includes('SUPERADMINISTRADOR');
   const puedeUsuarios = superadmin || globales.includes('GESTIONAR_USUARIOS');
   const puedeRoles = superadmin || globales.includes('GESTIONAR_ROLES');
-  const [tab, setTab] = useState(puedeUsuarios ? 'usuarios' : 'roles');
+  const puedeServicios = superadmin || globales.includes('CONFIGURAR_SERVICIOS');
+  const [tab, setTab] = useState(puedeUsuarios ? 'usuarios' : puedeRoles ? 'roles' : 'servicios');
   const [usuarios, setUsuarios] = useState<api.Usuario[]>([]),
     [roles, setRoles] = useState<api.Rol[]>([]),
     [permisos, setPermisos] = useState<api.Permiso[]>([]);
@@ -29,20 +31,22 @@ export function AdministracionPage({
     [recarga, setRecarga] = useState(0);
   const [editar, setEditar] = useState<{ usuario?: api.Usuario; rol?: api.Rol } | null>(null);
   const [credencial, setCredencial] = useState<api.Credencial | null>(null);
+  const [servicioEditando, setServicioEditando] = useState(false);
   const salida = useCallback(
     () =>
       !ocupado &&
-      (!(editar || credencial) ||
+      (!(editar || credencial || servicioEditando) ||
         window.confirm(
           'Hay datos sin terminar o una credencial temporal visible. ¿Salir y descartarlos de esta pantalla?',
         )),
-    [ocupado, editar, credencial],
+    [ocupado, editar, credencial, servicioEditando],
   );
   useEffect(() => {
     registrarSalida(salida);
     return () => registrarSalida(null);
   }, [registrarSalida, salida]);
   useEffect(() => {
+    if (tab === 'servicios') return;
     let vigente = true;
     const cargar = async () => {
       try {
@@ -119,13 +123,35 @@ export function AdministracionPage({
       setOcupado(false);
     }
   }
+  if (tab === 'servicios')
+    return (
+      <div className="page administration">
+        <div className="page-heading">
+          <div>
+            <span className="eyebrow">ACCESO Y RESPONSABILIDADES</span>
+            <h1>Administración</h1>
+            <p className="muted">Gestiona cuentas, accesos y servicios de la plataforma.</p>
+          </div>
+        </div>
+        <div className="section-tabs">
+          {puedeUsuarios && <button onClick={() => cambiarTab('usuarios')}>Usuarios</button>}
+          {puedeRoles && <button onClick={() => cambiarTab('roles')}>Roles y permisos</button>}
+          {puedeServicios && (
+            <button className="primary" onClick={() => cambiarTab('servicios')}>
+              Servicios
+            </button>
+          )}
+        </div>
+        <ServiciosPanel onEdicionChange={setServicioEditando} />
+      </div>
+    );
   return (
     <div className="page administration">
       <div className="page-heading">
         <div>
           <span className="eyebrow">ACCESO Y RESPONSABILIDADES</span>
           <h1>Administración</h1>
-          <p className="muted">Gestiona cuentas y configura los accesos de tu equipo.</p>
+          <p className="muted">Gestiona cuentas, accesos y servicios de la plataforma.</p>
         </div>
       </div>
       <div className="section-tabs">
@@ -142,6 +168,7 @@ export function AdministracionPage({
             Roles y permisos
           </button>
         )}
+        {puedeServicios && <button onClick={() => cambiarTab('servicios')}>Servicios</button>}
       </div>
       {error && (
         <p className="error" role="alert">

@@ -1,5 +1,7 @@
 package bo.edu.uml.ia.servicio;
 
+import bo.edu.uml.servicios.servicio.ResolverServicioActivo;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -19,8 +21,8 @@ import org.springframework.web.client.RestClientException;
 import java.util.*;
 
 /**
- * Adaptador deliberadamente opt-in. Las URL, modelos y credenciales solo se leen del entorno; el
- * modo predeterminado LOCAL no realiza tráfico de red.
+ * Adaptador deliberadamente opt-in. Prefiere un servicio activo protegido en PostgreSQL y conserva
+ * las variables de entorno como compatibilidad. El modo LOCAL no realiza tráfico de red.
  */
 @Service
 public class ConectorIaRemoto implements ProveedorIa {
@@ -38,8 +40,9 @@ public class ConectorIaRemoto implements ProveedorIa {
 
     private final RestClient http;
     private final ObjectMapper json;
-    private final String proveedor;
-    private final String clave;
+    private final ResolverServicioActivo servicios;
+    private final String proveedorEntorno;
+    private final String claveEntorno;
     private final String urlTexto;
     private final String urlVision;
     private final String urlTranscripcion;
@@ -50,6 +53,7 @@ public class ConectorIaRemoto implements ProveedorIa {
     public ConectorIaRemoto(
             RestClient.Builder builder,
             ObjectMapper json,
+            ResolverServicioActivo servicios,
             @Value("${uml.ia.proveedor:LOCAL}") String proveedor,
             @Value("${uml.ia.clave:}") String clave,
             @Value("${uml.ia.url-texto:}") String urlTexto,
@@ -63,8 +67,10 @@ public class ConectorIaRemoto implements ProveedorIa {
         fabrica.setReadTimeout(20000);
         this.http = builder.requestFactory(fabrica).build();
         this.json = json;
-        this.proveedor = proveedor == null ? "LOCAL" : proveedor.trim().toUpperCase(Locale.ROOT);
-        this.clave = limpiarConfiguracion(clave);
+        this.servicios = servicios;
+        this.proveedorEntorno =
+                proveedor == null ? "LOCAL" : proveedor.trim().toUpperCase(Locale.ROOT);
+        this.claveEntorno = limpiarConfiguracion(clave);
         this.urlTexto = limpiarConfiguracion(urlTexto);
         this.urlVision = limpiarConfiguracion(urlVision);
         this.urlTranscripcion = limpiarConfiguracion(urlTranscripcion);
@@ -75,18 +81,20 @@ public class ConectorIaRemoto implements ProveedorIa {
 
     @Override
     public Optional<String> normalizar(String instruccion) {
-        if (!configurado(urlTexto, modeloTexto)) return Optional.empty();
-        return generar(urlTexto, modeloTexto, GRAMATICA + instruccion, null, null, "texto");
+        var configuracion = configuracion("IA_TEXTO", urlTexto, modeloTexto);
+        if (!configurado(configuracion)) return Optional.empty();
+        return generar(configuracion, GRAMATICA + instruccion, null, null, "texto");
     }
 
     @Override
     public Optional<String> transcribir(byte[] audio, String tipoContenido, String nombre) {
-        if (!configurado(urlTranscripcion, modeloTranscripcion)) return Optional.empty();
-        if (es("OPENAI")) return transcribirOpenAi(audio, tipoContenido, nombre);
-        if (es("GEMINI"))
+        var configuracion = configuracion("VOZ_A_TEXTO", urlTranscripcion, modeloTranscripcion);
+        if (!configurado(configuracion)) return Optional.empty();
+        if (es(configuracion, "OPENAI"))
+            return transcribirOpenAi(configuracion, audio, tipoContenido, nombre);
+        if (es(configuracion, "GEMINI"))
             return generar(
-                    urlTranscripcion,
-                    modeloTranscripcion,
+                    configuracion,
                     "Transcribe literalmente este audio en español. Devuelve solo la"
                             + " transcripción.",
                     tipoContenido,
@@ -97,39 +105,51 @@ public class ConectorIaRemoto implements ProveedorIa {
 
     @Override
     public Optional<String> reconocerDiagrama(byte[] imagen, String tipoContenido) {
-        if (!configurado(urlVision, modeloVision)) return Optional.empty();
-        return generar(urlVision, modeloVision, LEER_DIAGRAMA, tipoContenido, imagen, "visión");
+        var configuracion = configuracion("IA_IMAGEN", urlVision, modeloVision);
+        if (!configurado(configuracion)) return Optional.empty();
+        return generar(configuracion, LEER_DIAGRAMA, tipoContenido, imagen, "visión");
     }
 
     private Optional<String> generar(
-            String url,
-            String modelo,
+            ConfiguracionProveedor configuracion,
             String prompt,
             String tipoContenido,
             byte[] contenido,
             String capacidad) {
         try {
             JsonNode respuesta;
-            if (es("OPENAI"))
+            if (es(configuracion, "OPENAI"))
                 respuesta =
-                        enviarJson(url, solicitudOpenAi(modelo, prompt, tipoContenido, contenido));
-            else if (es("GEMINI"))
-                respuesta = enviarJson(url, solicitudGemini(prompt, tipoContenido, contenido));
-            else if (es("OLLAMA"))
-                respuesta = enviarJson(url, solicitudOllama(modelo, prompt, contenido));
+                        enviarJson(
+                                configuracion,
+                                solicitudOpenAi(
+                                        configuracion.modelo(), prompt, tipoContenido, contenido));
+            else if (es(configuracion, "GEMINI"))
+                respuesta =
+                        enviarJson(
+                                configuracion, solicitudGemini(prompt, tipoContenido, contenido));
+            else if (es(configuracion, "OLLAMA"))
+                respuesta =
+                        enviarJson(
+                                configuracion,
+                                solicitudOllama(configuracion.modelo(), prompt, contenido));
             else return Optional.empty();
-            return limpiar(textoRespuesta(respuesta));
+            return limpiar(textoRespuesta(configuracion, respuesta));
         } catch (RestClientException | IllegalArgumentException e) {
             LOG.warn(
                     "Proveedor IA {} no disponible para {}: {}",
-                    proveedor,
+                    configuracion.proveedor(),
                     capacidad,
                     e.getClass().getSimpleName());
             return Optional.empty();
         }
     }
 
-    private Optional<String> transcribirOpenAi(byte[] audio, String tipoContenido, String nombre) {
+    private Optional<String> transcribirOpenAi(
+            ConfiguracionProveedor configuracion,
+            byte[] audio,
+            String tipoContenido,
+            String nombre) {
         try {
             var partes = new MultipartBodyBuilder();
             partes.part(
@@ -141,20 +161,20 @@ public class ConectorIaRemoto implements ProveedorIa {
                                 }
                             })
                     .contentType(MediaType.parseMediaType(tipoContenido));
-            partes.part("model", modeloTranscripcion);
+            partes.part("model", configuracion.modelo());
             partes.part("language", "es");
             var solicitud =
                     http.post()
-                            .uri(urlTranscripcion)
+                            .uri(configuracion.url())
                             .contentType(MediaType.MULTIPART_FORM_DATA)
-                            .headers(this::autorizar)
+                            .headers(cabeceras -> autorizar(configuracion, cabeceras))
                             .body(partes.build());
             JsonNode respuesta = solicitud.retrieve().body(JsonNode.class);
             return limpiar(respuesta == null ? null : respuesta.path("text").asText(null));
         } catch (RestClientException | IllegalArgumentException e) {
             LOG.warn(
                     "Proveedor IA {} no disponible para transcripción: {}",
-                    proveedor,
+                    configuracion.proveedor(),
                     e.getClass().getSimpleName());
             return Optional.empty();
         }
@@ -208,27 +228,27 @@ public class ConectorIaRemoto implements ProveedorIa {
         return cuerpo;
     }
 
-    private JsonNode enviarJson(String url, JsonNode cuerpo) {
+    private JsonNode enviarJson(ConfiguracionProveedor configuracion, JsonNode cuerpo) {
         return http.post()
-                .uri(url)
+                .uri(configuracion.url())
                 .contentType(MediaType.APPLICATION_JSON)
-                .headers(this::autorizar)
+                .headers(cabeceras -> autorizar(configuracion, cabeceras))
                 .body(cuerpo)
                 .retrieve()
                 .body(JsonNode.class);
     }
 
-    private void autorizar(HttpHeaders cabeceras) {
-        if (clave.isBlank()) return;
-        if (es("GEMINI")) cabeceras.set("x-goog-api-key", clave);
-        else cabeceras.setBearerAuth(clave);
+    private void autorizar(ConfiguracionProveedor configuracion, HttpHeaders cabeceras) {
+        if (configuracion.clave().isBlank()) return;
+        if (es(configuracion, "GEMINI")) cabeceras.set("x-goog-api-key", configuracion.clave());
+        else cabeceras.setBearerAuth(configuracion.clave());
     }
 
-    private String textoRespuesta(JsonNode respuesta) {
+    private String textoRespuesta(ConfiguracionProveedor configuracion, JsonNode respuesta) {
         if (respuesta == null) return null;
-        if (es("OPENAI"))
+        if (es(configuracion, "OPENAI"))
             return respuesta.path("choices").path(0).path("message").path("content").asText(null);
-        if (es("GEMINI"))
+        if (es(configuracion, "GEMINI"))
             return respuesta
                     .path("candidates")
                     .path(0)
@@ -237,7 +257,7 @@ public class ConectorIaRemoto implements ProveedorIa {
                     .path(0)
                     .path("text")
                     .asText(null);
-        if (es("OLLAMA")) return respuesta.path("response").asText(null);
+        if (es(configuracion, "OLLAMA")) return respuesta.path("response").asText(null);
         return null;
     }
 
@@ -260,15 +280,37 @@ public class ConectorIaRemoto implements ProveedorIa {
         return limpia.isBlank() ? Optional.empty() : Optional.of(limpia);
     }
 
-    private boolean configurado(String url, String modelo) {
-        return !es("LOCAL") && !url.isBlank() && !modelo.isBlank();
+    private ConfiguracionProveedor configuracion(
+            String tipo, String urlEntorno, String modeloEntorno) {
+        return servicios
+                .resolver(tipo)
+                .map(
+                        activa ->
+                                new ConfiguracionProveedor(
+                                        activa.proveedor(),
+                                        activa.credencial(),
+                                        activa.url(),
+                                        activa.modelo()))
+                .orElseGet(
+                        () ->
+                                new ConfiguracionProveedor(
+                                        proveedorEntorno, claveEntorno, urlEntorno, modeloEntorno));
     }
 
-    private boolean es(String esperado) {
-        return esperado.equals(proveedor);
+    private boolean configurado(ConfiguracionProveedor configuracion) {
+        return !es(configuracion, "LOCAL")
+                && !configuracion.url().isBlank()
+                && !configuracion.modelo().isBlank();
+    }
+
+    private boolean es(ConfiguracionProveedor configuracion, String esperado) {
+        return esperado.equals(configuracion.proveedor());
     }
 
     private String limpiarConfiguracion(String valor) {
         return valor == null ? "" : valor.trim();
     }
+
+    private record ConfiguracionProveedor(
+            String proveedor, String clave, String url, String modelo) {}
 }

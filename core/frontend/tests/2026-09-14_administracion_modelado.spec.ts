@@ -136,6 +136,61 @@ test('roles: matriz real, revocación y filtros de ámbito', async ({ page }) =>
   await page.screenshot({ path: 'test-results/administracion-verificada.png', fullPage: true });
 });
 
+test('servicios: registro protegido, comprobación y cambio de estado', async ({ page }) => {
+  await entrar(page);
+  await page.getByRole('button', { name: /Administración/ }).click();
+  await page.getByRole('button', { name: 'Servicios', exact: true }).click();
+  await page.getByRole('button', { name: 'Registrar servicio', exact: true }).click();
+  const sufijo = crypto.randomUUID().slice(0, 8);
+  const nombre = 'Motor local ' + sufijo;
+  const credencial = 'credencial-ficticia-' + crypto.randomUUID();
+  await page.getByLabel('Nombre', { exact: true }).fill(nombre);
+  await page
+    .getByLabel('Parámetros adicionales (JSON, sin credenciales)')
+    .fill(JSON.stringify({ perfilPrueba: sufijo }));
+  await page.getByLabel(/^Credencial/).fill(credencial);
+  await page.getByRole('button', { name: 'Registrar y comprobar', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Servicio guardado y disponible');
+
+  const fila = page.locator('tbody tr').filter({ hasText: nombre });
+  await expect(fila).toContainText('ACTIVO');
+  await expect(fila).toContainText('Protegida');
+  await expect(page.getByText(credencial, { exact: true })).toHaveCount(0);
+
+  const respuestaVerificacion = page.waitForResponse(
+    (respuesta) =>
+      respuesta.url().includes('/api/administracion/servicios/') &&
+      respuesta.url().endsWith('/verificar') &&
+      respuesta.request().method() === 'POST',
+  );
+  await fila.getByRole('button', { name: 'Probar conexión ' + nombre }).click();
+  expect((await respuestaVerificacion).status()).toBe(200);
+  await expect(page.getByRole('status')).toContainText('Conexión comprobada correctamente');
+  await expect(fila).toContainText('DISPONIBLE');
+
+  const respuestaDesactivacion = page.waitForResponse(
+    (respuesta) =>
+      respuesta.url().includes('/api/administracion/servicios/') &&
+      respuesta.url().endsWith('/estado') &&
+      respuesta.request().method() === 'POST',
+  );
+  page.once('dialog', (dialogo) => dialogo.accept());
+  await fila.getByRole('button', { name: 'Desactivar ' + nombre }).click();
+  expect((await respuestaDesactivacion).status()).toBe(200);
+  await expect(page.getByRole('status')).toContainText('Servicio desactivado');
+  await expect(fila).toContainText('INACTIVO');
+  const respuestaActivacion = page.waitForResponse(
+    (respuesta) =>
+      respuesta.url().includes('/api/administracion/servicios/') &&
+      respuesta.url().endsWith('/estado') &&
+      respuesta.request().method() === 'POST',
+  );
+  await fila.getByRole('button', { name: 'Activar ' + nombre }).click();
+  expect((await respuestaActivacion).status()).toBe(200);
+  await expect(page.getByRole('status')).toContainText('Servicio activado');
+  await expect(fila).toContainText('ACTIVO');
+});
+
 test('miembros: incorporación, excepción denegada, suspensión y propiedad protegida', async ({
   page,
   browser,

@@ -1340,6 +1340,36 @@ p {
 .management-table td button {
   margin: 0 8px 6px 0;
 }
+.service-form .panel-heading {
+  margin-bottom: 18px;
+}
+.service-form .span-2 {
+  grid-column: 1 / -1;
+}
+.service-form .check-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.service-form .check-row input {
+  width: 16px;
+  margin: 0;
+}
+.services-table {
+  min-width: 1020px;
+}
+.services-table td:last-child {
+  min-width: 250px;
+}
+.success {
+  padding: 12px 14px;
+  border: 1px solid #b8d9ca;
+  border-radius: 8px;
+  color: #175b47;
+  background: #edf8f3;
+}
 .modal-wide {
   width: min(1100px, 94vw);
   max-width: min(1100px, 94vw);
@@ -1427,6 +1457,12 @@ p {
   overflow-wrap: anywhere;
 }
 @media (max-width: 700px) {
+  .service-form .form-grid {
+    grid-template-columns: 1fr;
+  }
+  .service-form .span-2 {
+    grid-column: auto;
+  }
   .activity-values {
     grid-template-columns: 1fr;
   }

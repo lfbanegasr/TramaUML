@@ -38,7 +38,7 @@ En documentación nueva se escribirá primero el identificador del catálogo, ut
 | CU17 | CU18 | Gestionar conflictos | Completo comprobado | Comparación, conservar, descartar, fusionar, idempotencia y trazabilidad |
 | CU18 | CU19 | Consultar historial | Completo comprobado | Listado, filtros, detalle y comparación semántica de versiones |
 | CU19 | CU20 | Restaurar versión | Completo comprobado | Previsualización, bloqueadores, restauración atómica como nueva versión y WebSocket |
-| CU20 | CU21 | Configurar servicios de plataforma | Pendiente | Existen `servicio_plataforma` y `secreto_servicio`, pero no API ni interfaz administrativa |
+| CU20 | CU21 | Configurar servicios de plataforma | Completo comprobado | API e interfaz administrativa, secretos AES-256-GCM, filtros, comprobación, estados, auditoría y consumo desde P04 |
 | CU21 | CU22 | Modificar mediante texto | Avanzado parcial | Solicitud y propuesta seguras; el motor local solo crea clases, atributos y relaciones |
 | CU22 | CU23 | Modificar mediante voz | Avanzado parcial | Web Speech y MediaRecorder; faltan reproducción, límites de duración y proveedor validado |
 | CU23 | CU24 | Reconstruir desde imagen | Avanzado parcial | Carga segura, persistencia y adaptador; falta OCR/visión funcional validada y edición de dudosos |
@@ -58,6 +58,7 @@ En documentación nueva se escribirá primero el identificador del catálogo, ut
 - Historial y restauración: paquete `bo.edu.uml.historial` y [contrato del incremento 06](2026-09-15_incremento_06_contratos.md).
 - XMI y generación: paquetes `bo.edu.uml.xmi` y `bo.edu.uml.generacion` y [seguimiento del incremento 08](2026-09-18_seguimiento_incremento_08.md).
 - Asistencia inteligente: paquete `bo.edu.uml.ia`, [contrato P04](2026-09-19_p04_contrato_asistencia_inteligente.md) y [seguimiento del incremento 09](2026-09-19_seguimiento_incremento_09_p04.md).
+- Servicios de plataforma: paquete `bo.edu.uml.servicios` y [contrato del incremento 11](2026-09-20_incremento_11_contrato_servicios_plataforma.md).
 
 ## Orden de continuidad aprobado
 
