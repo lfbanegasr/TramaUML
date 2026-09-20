@@ -3,6 +3,8 @@ package bo.edu.uml.ia.dto;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
@@ -20,6 +22,15 @@ public final class IaDto {
 
     public record Rechazo(
             @Size(max = 1000, message = "El motivo supera el tamaño permitido") String motivo) {}
+
+    public record AjusteOperacion(
+            @NotNull UUID id, boolean seleccionada, JsonNode valorPropuesto) {}
+
+    public record RevisionPropuesta(
+            @NotBlank(message = "La revisión de la propuesta es obligatoria") String revision,
+            @NotEmpty(message = "Debes enviar las operaciones de la propuesta")
+                    @Size(max = 100, message = "La propuesta supera el límite de operaciones")
+                    List<AjusteOperacion> operaciones) {}
 
     public record Operacion(
             UUID id,
@@ -48,6 +59,8 @@ public final class IaDto {
             String resumen,
             BigDecimal confianzaGeneral,
             Instant creadoEn,
+            String revisionEdicion,
+            boolean puedeAplicar,
             List<Operacion> operaciones) {}
 
     public record ResultadoSolicitud(

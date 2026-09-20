@@ -31,6 +31,8 @@ export type PropuestaIa = {
   resumen: string;
   confianzaGeneral: number;
   creadoEn: string;
+  revisionEdicion: string;
+  puedeAplicar: boolean;
   operaciones: OperacionIa[];
 };
 
@@ -63,10 +65,12 @@ export function solicitarVoz(
   modelo: string,
   archivo: Blob,
   texto?: string,
+  duracionSegundos?: number,
 ): Promise<ResultadoSolicitudIa> {
   const cuerpo = new FormData();
   cuerpo.append('archivo', archivo, archivo.type.includes('wav') ? 'voz.wav' : 'voz.webm');
   if (texto?.trim()) cuerpo.append('texto', texto.trim());
+  if (duracionSegundos) cuerpo.append('duracionSegundos', String(duracionSegundos));
   return api<ResultadoSolicitudIa>('/modelos/' + modelo + '/ia/solicitud/voz', {
     method: 'POST',
     body: cuerpo,
@@ -92,6 +96,20 @@ export const leerPropuestaVigente = (modelo: string): Promise<PropuestaIa | unde
 
 export const leerPropuesta = (modelo: string, propuesta: string): Promise<PropuestaIa> =>
   api<PropuestaIa>('/modelos/' + modelo + '/ia/propuestas/' + propuesta);
+
+export const revisarPropuesta = (
+  modelo: string,
+  propuesta: PropuestaIa,
+  operaciones: Array<{
+    id: string;
+    seleccionada: boolean;
+    valorPropuesto: Record<string, unknown> | null;
+  }>,
+): Promise<PropuestaIa> =>
+  api<PropuestaIa>('/modelos/' + modelo + '/ia/propuestas/' + propuesta.id, {
+    method: 'PUT',
+    body: JSON.stringify({ revision: propuesta.revisionEdicion, operaciones }),
+  });
 
 export const aplicarPropuesta = (
   modelo: string,

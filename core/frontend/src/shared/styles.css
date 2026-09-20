@@ -2137,6 +2137,11 @@ code.small {
 .ia-audio-visualizer.active span {
   animation: ia-audio-level 0.7s ease-in-out infinite alternate;
 }
+.ia-audio-preview {
+  display: block;
+  width: min(100%, 420px);
+  margin-top: 12px;
+}
 @keyframes ia-audio-level {
   to {
     height: 48px;
@@ -2257,7 +2262,7 @@ button.ia-dropzone.selected {
 }
 .ia-operation summary {
   display: grid;
-  grid-template-columns: 65px 1fr auto;
+  grid-template-columns: auto 65px 1fr auto;
   align-items: center;
   gap: 10px;
   padding: 12px;
@@ -2281,6 +2286,44 @@ button.ia-dropzone.selected {
 }
 .ia-operation > div small {
   display: block;
+}
+.ia-operation > div > label {
+  display: block;
+  margin: 10px 0 5px;
+  color: #425d4b;
+  font-weight: 700;
+}
+.ia-operation > div > textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 9px;
+  background: #fbfcfb;
+  color: #23372a;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.ia-operation.invalid {
+  border-color: #dfadad;
+}
+.ia-current-value {
+  margin-top: 9px;
+}
+.ia-current-value summary {
+  display: block;
+  padding: 0;
+  color: #617267;
+  font-size: 10px;
+}
+.ia-current-value pre {
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 6px;
+  background: #f4f6f4;
+  white-space: pre-wrap;
 }
 .ia-operation-kind {
   padding: 4px 6px;
@@ -2328,10 +2371,10 @@ button.ia-dropzone.selected {
     height: 70px;
   }
   .ia-operation summary {
-    grid-template-columns: 58px 1fr;
+    grid-template-columns: auto 58px 1fr;
   }
   .ia-operation-confidence {
-    grid-column: 2;
+    grid-column: 3;
   }
   .ia-operation > div {
     padding-left: 80px;

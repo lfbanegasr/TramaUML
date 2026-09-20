@@ -4233,6 +4233,14 @@ class NucleoIntegracionTest {
         mvc.perform(
                         autorizado(
                                 multipart("/api/modelos/" + modelo + "/ia/solicitud/voz")
+                                        .file(audio)
+                                        .param("duracionSegundos", "121"),
+                                c))
+                .andExpect(status().isUnprocessableEntity());
+
+        mvc.perform(
+                        autorizado(
+                                multipart("/api/modelos/" + modelo + "/ia/solicitud/voz")
                                         .file(audio),
                                 c))
                 .andExpect(status().isUnprocessableEntity())
@@ -4337,6 +4345,17 @@ class NucleoIntegracionTest {
                                 """,
                                 Long.class))
                 .isEqualTo(6);
+        assertThat(
+                        jdbc.queryForObject(
+                                """
+                                select count(*) from uml_colaborativo.rol r
+                                join uml_colaborativo.rol_permiso rp on rp.id_rol=r.id
+                                join uml_colaborativo.permiso p on p.id=rp.id_permiso
+                                where r.codigo='LECTOR_PROYECTO'
+                                  and p.codigo='REVISAR_PROPUESTA_IA'
+                                """,
+                                Long.class))
+                .isEqualTo(1);
     }
 
     @Test
@@ -4395,5 +4414,181 @@ class NucleoIntegracionTest {
                                 propuesta))
                 .isEqualTo("LISTO");
         verify(canal, never()).publicarCambio(any());
+    }
+
+    @Test
+    void propuestaIaPermiteCorregirRevalidarYAplicarUnaActualizacion() throws Exception {
+        var c = login(usuario, clave);
+        String modelo = proyecto(c).get("idModelo").asText();
+        asegurarSesion(c, modelo);
+        enviar(c, modelo, cambio(1, UUID.randomUUID(), clase(UUID.randomUUID(), "Cliente")))
+                .andExpect(status().isOk());
+
+        var creada =
+                respuesta(
+                        mvc.perform(
+                                        autorizado(
+                                                        post(
+                                                                "/api/modelos/"
+                                                                        + modelo
+                                                                        + "/ia/solicitud/texto"),
+                                                        c)
+                                                .contentType("application/json")
+                                                .content(
+                                                        json.writeValueAsString(
+                                                                Map.of(
+                                                                        "prompt",
+                                                                        "Renombra la clase Cliente"
+                                                                                + " a Comprador"))))
+                                .andExpect(status().isCreated()));
+        String propuesta = creada.get("idPropuesta").asText();
+        var detalle =
+                respuesta(
+                        mvc.perform(
+                                        autorizado(
+                                                get(
+                                                        "/api/modelos/"
+                                                                + modelo
+                                                                + "/ia/propuestas/"
+                                                                + propuesta),
+                                                c))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.puedeAplicar").value(true))
+                                .andExpect(
+                                        jsonPath("$.operaciones[0].tipoOperacion")
+                                                .value("ACTUALIZAR"))
+                                .andExpect(
+                                        jsonPath("$.operaciones[0].valorActual.nombre")
+                                                .value("Cliente")));
+
+        var operacion = detalle.get("operaciones").get(0);
+        var propuesto = operacion.get("valorPropuesto").deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) propuesto).put("nombre", "ClienteFinal");
+        var revisada =
+                respuesta(
+                        mvc.perform(
+                                        autorizado(
+                                                        put(
+                                                                "/api/modelos/"
+                                                                        + modelo
+                                                                        + "/ia/propuestas/"
+                                                                        + propuesta),
+                                                        c)
+                                                .contentType("application/json")
+                                                .content(
+                                                        json.writeValueAsString(
+                                                                Map.of(
+                                                                        "revision",
+                                                                        detalle.get(
+                                                                                        "revisionEdicion")
+                                                                                .asText(),
+                                                                        "operaciones",
+                                                                        List.of(
+                                                                                Map.of(
+                                                                                        "id",
+                                                                                        operacion
+                                                                                                .get(
+                                                                                                        "id")
+                                                                                                .asText(),
+                                                                                        "seleccionada",
+                                                                                        true,
+                                                                                        "valorPropuesto",
+                                                                                        propuesto))))))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.puedeAplicar").value(true)));
+        assertThat(revisada.get("revisionEdicion").asText())
+                .isNotEqualTo(detalle.get("revisionEdicion").asText());
+
+        mvc.perform(
+                        autorizado(
+                                post(
+                                        "/api/modelos/"
+                                                + modelo
+                                                + "/ia/propuestas/"
+                                                + propuesta
+                                                + "/aplicar"),
+                                c))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.revision").value(3));
+        mvc.perform(autorizado(get("/api/modelos/" + modelo), c))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.clases[0].nombre").value("ClienteFinal"));
+    }
+
+    @Test
+    void revisionIaImpideAplicarUnaSeleccionConDependenciasOJsonInvalidos() throws Exception {
+        var c = login(usuario, clave);
+        String modelo = proyecto(c).get("idModelo").asText();
+        asegurarSesion(c, modelo);
+        var creada =
+                respuesta(
+                        mvc.perform(
+                                        autorizado(
+                                                        post(
+                                                                "/api/modelos/"
+                                                                        + modelo
+                                                                        + "/ia/solicitud/texto"),
+                                                        c)
+                                                .contentType("application/json")
+                                                .content(
+                                                        json.writeValueAsString(
+                                                                Map.of(
+                                                                        "prompt",
+                                                                        "Crea clase Cliente con"
+                                                                            + " atributo id: Long y"
+                                                                            + " clase Pedido con"
+                                                                            + " relación 1 a *"))))
+                                .andExpect(status().isCreated()));
+        String propuesta = creada.get("idPropuesta").asText();
+        var detalle =
+                respuesta(
+                        mvc.perform(
+                                        autorizado(
+                                                get(
+                                                        "/api/modelos/"
+                                                                + modelo
+                                                                + "/ia/propuestas/"
+                                                                + propuesta),
+                                                c))
+                                .andExpect(status().isOk()));
+        List<Map<String, Object>> ajustes = new ArrayList<>();
+        for (int i = 0; i < detalle.get("operaciones").size(); i++) {
+            var operacion = detalle.get("operaciones").get(i);
+            ajustes.add(
+                    Map.of(
+                            "id",
+                            operacion.get("id").asText(),
+                            "seleccionada",
+                            i != 0,
+                            "valorPropuesto",
+                            operacion.get("valorPropuesto")));
+        }
+        mvc.perform(
+                        autorizado(put("/api/modelos/" + modelo + "/ia/propuestas/" + propuesta), c)
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of(
+                                                        "revision",
+                                                        detalle.get("revisionEdicion").asText(),
+                                                        "operaciones",
+                                                        ajustes))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.puedeAplicar").value(false));
+
+        mvc.perform(
+                        autorizado(
+                                post(
+                                        "/api/modelos/"
+                                                + modelo
+                                                + "/ia/propuestas/"
+                                                + propuesta
+                                                + "/aplicar"),
+                                c))
+                .andExpect(status().isUnprocessableEntity());
+        mvc.perform(autorizado(get("/api/modelos/" + modelo), c))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.revision").value(1))
+                .andExpect(jsonPath("$.clases").isEmpty());
     }
 }

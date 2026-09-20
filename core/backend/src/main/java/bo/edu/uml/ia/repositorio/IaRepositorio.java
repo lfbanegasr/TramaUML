@@ -2,6 +2,7 @@ package bo.edu.uml.ia.repositorio;
 
 import bo.edu.uml.compartido.ApiException;
 import bo.edu.uml.ia.dto.IaDto.*;
+import bo.edu.uml.ia.servicio.MotorAsistenciaInteligente.ElementoContexto;
 import bo.edu.uml.ia.servicio.MotorAsistenciaInteligente.OperacionGenerada;
 import bo.edu.uml.modelado.dto.ModeladoDto.Accion;
 
@@ -38,7 +39,8 @@ public class IaRepositorio {
             UUID proyecto,
             long revisionBase,
             long revisionActual,
-            String estado) {}
+            String estado,
+            String revisionEdicion) {}
 
     public CabeceraModelo cabecera(UUID modelo) {
         return jdbc
@@ -86,6 +88,62 @@ public class IaRepositorio {
                         + " and eliminado_en is null",
                 Map.of("modelo", modelo),
                 Integer.class);
+    }
+
+    public List<ElementoContexto> elementosContexto(UUID modelo) {
+        return jdbc.query(
+                """
+                select id,tipo,nombre,id_contenedor,valor::text from (
+                  select c.id,'CLASE' tipo,c.nombre,null::uuid id_contenedor,
+                    jsonb_build_object('nombre',c.nombre,'descripcion',c.descripcion,
+                      'estereotipo',c.estereotipo,'visibilidad',c.visibilidad,
+                      'esAbstracto',c.es_abstracto,'esPersistente',c.es_persistente,
+                      'idPaquete',c.id_paquete) valor
+                  from uml_colaborativo.clase_uml c
+                  where c.id_modelo=:modelo and c.eliminado_en is null
+                  union all
+                  select a.id,'ATRIBUTO',a.nombre,a.id_clase,
+                    jsonb_build_object('idClase',a.id_clase,'nombre',a.nombre,'tipoUml',a.tipo_uml,
+                      'visibilidad',a.visibilidad,'minimo',a.multiplicidad_minima,
+                      'maximo',a.multiplicidad_maxima,'esIdentificador',a.es_identificador,
+                      'esEstatico',a.es_estatico,'esUnico',a.es_unico,
+                      'valorPredeterminado',a.valor_predeterminado,
+                      'restricciones',a.restricciones_json)
+                  from uml_colaborativo.atributo_uml a
+                  join uml_colaborativo.clase_uml c on c.id=a.id_clase
+                  where c.id_modelo=:modelo and c.eliminado_en is null and a.eliminado_en is null
+                  union all
+                  select o.id,'OPERACION',o.nombre,o.id_clase,
+                    jsonb_build_object('idClase',o.id_clase,'nombre',o.nombre,
+                      'tipoRetorno',o.tipo_retorno,'visibilidad',o.visibilidad,
+                      'esEstatico',o.es_estatico,'esAbstracto',o.es_abstracto,
+                      'parametros',coalesce((select jsonb_agg(jsonb_build_object(
+                        'id',p.id,'nombre',p.nombre,'tipoUml',p.tipo_uml,'direccion',p.direccion,
+                        'esObligatorio',p.es_obligatorio,'valorPredeterminado',p.valor_predeterminado)
+                        order by p.orden) from uml_colaborativo.parametro_uml p
+                        where p.id_operacion=o.id and p.eliminado_en is null),'[]'::jsonb))
+                  from uml_colaborativo.operacion_uml o
+                  join uml_colaborativo.clase_uml c on c.id=o.id_clase
+                  where c.id_modelo=:modelo and c.eliminado_en is null and o.eliminado_en is null
+                  union all
+                  select r.id,'RELACION',r.nombre,null::uuid,
+                    jsonb_build_object('origen',r.id_clase_origen,'destino',r.id_clase_destino,
+                      'nombre',r.nombre,'tipo',r.tipo_relacion,'direccion',r.direccion,
+                      'rolOrigen',r.rol_origen,'rolDestino',r.rol_destino,
+                      'minimoOrigen',r.minimo_origen,'maximoOrigen',r.maximo_origen,
+                      'minimoDestino',r.minimo_destino,'maximoDestino',r.maximo_destino)
+                  from uml_colaborativo.relacion_uml r
+                  where r.id_modelo=:modelo and r.eliminado_en is null
+                ) elementos order by tipo,nombre,id
+                """,
+                Map.of("modelo", modelo),
+                (r, n) ->
+                        new ElementoContexto(
+                                r.getObject("id", UUID.class),
+                                r.getString("tipo"),
+                                r.getString("nombre"),
+                                r.getObject("id_contenedor", UUID.class),
+                                nodo(r.getString("valor"))));
     }
 
     public UUID guardarArchivo(
@@ -212,7 +270,7 @@ public class IaRepositorio {
                 insert into uml_colaborativo.operacion_propuesta
                   (id,id_propuesta,numero_secuencia,tipo_operacion,tipo_entidad,id_entidad_destino,
                    valor_actual,valor_propuesto,confianza,esta_seleccionado,estado,mensajes_validacion)
-                values(:id,:propuesta,:secuencia,:operacion,:entidad,:destino,null,
+                values(:id,:propuesta,:secuencia,:operacion,:entidad,:destino,cast(:actual as jsonb),
                        cast(:propuesto as jsonb),:confianza,:seleccionada,:estado,cast(:mensajes as jsonb))
                 """,
                 new MapSqlParameterSource()
@@ -222,7 +280,8 @@ public class IaRepositorio {
                         .addValue("operacion", operacion.tipoOperacion())
                         .addValue("entidad", operacion.tipoEntidad())
                         .addValue("destino", operacion.idEntidad())
-                        .addValue("propuesto", operacion.valorPropuesto().toString())
+                        .addValue("actual", textoJson(operacion.valorActual()))
+                        .addValue("propuesto", textoJson(operacion.valorPropuesto()))
                         .addValue("confianza", operacion.confianza())
                         .addValue("seleccionada", operacion.seleccionada())
                         .addValue("estado", operacion.estado())
@@ -255,14 +314,16 @@ public class IaRepositorio {
                 String estado,
                 String resumen,
                 BigDecimal confianza,
-                Timestamp creada) {}
+                Timestamp creada,
+                Timestamp actualizada) {}
         Cabecera c =
                 jdbc
                         .query(
                                 """
                                 select p.id,p.id_solicitud,s.tipo_entrada,
                                   coalesce(s.texto_corregido,s.texto_transcrito,s.texto_original) texto,
-                                  s.revision_base,m.revision_actual,p.estado,p.resumen,p.confianza_general,p.creado_en
+                                  s.revision_base,m.revision_actual,p.estado,p.resumen,p.confianza_general,
+                                  p.creado_en,p.actualizado_en
                                 from uml_colaborativo.propuesta_inteligente p
                                 join uml_colaborativo.solicitud_inteligente s on s.id=p.id_solicitud
                                 join uml_colaborativo.modelo_uml m on m.id=s.id_modelo
@@ -280,10 +341,17 @@ public class IaRepositorio {
                                                 r.getString("estado"),
                                                 r.getString("resumen"),
                                                 r.getBigDecimal("confianza_general"),
-                                                r.getTimestamp("creado_en")))
+                                                r.getTimestamp("creado_en"),
+                                                r.getTimestamp("actualizado_en")))
                         .stream()
                         .findFirst()
                         .orElseThrow(() -> new ApiException(404, "Propuesta no disponible."));
+        List<Operacion> operaciones = operaciones(propuesta);
+        boolean seleccionValida =
+                operaciones.stream().anyMatch(Operacion::seleccionada)
+                        && operaciones.stream()
+                                .filter(Operacion::seleccionada)
+                                .allMatch(o -> "VALIDO".equals(o.estado()));
         return new Propuesta(
                 c.id(),
                 c.solicitud(),
@@ -296,7 +364,12 @@ public class IaRepositorio {
                 c.resumen(),
                 c.confianza(),
                 c.creada().toInstant(),
-                operaciones(propuesta));
+                c.actualizada().toInstant().toString(),
+                "LISTO".equals(c.estado())
+                        && c.base() == c.actual()
+                        && seleccionValida
+                        && !dependenciasInvalidas(propuesta),
+                operaciones);
     }
 
     private List<Operacion> operaciones(UUID propuesta) {
@@ -345,11 +418,58 @@ public class IaRepositorio {
                 });
     }
 
+    public void actualizarOperacion(
+            UUID propuesta,
+            UUID operacion,
+            boolean seleccionada,
+            JsonNode valorPropuesto,
+            String estado,
+            JsonNode mensajes) {
+        int filas =
+                jdbc.update(
+                        """
+                        update uml_colaborativo.operacion_propuesta o
+                        set esta_seleccionado=:seleccionada,valor_propuesto=cast(:valor as jsonb),
+                            estado=:estado,mensajes_validacion=cast(:mensajes as jsonb)
+                        from uml_colaborativo.propuesta_inteligente p
+                        where o.id=:operacion and o.id_propuesta=:propuesta
+                          and p.id=o.id_propuesta and p.estado='LISTO'
+                        """,
+                        new MapSqlParameterSource()
+                                .addValue("propuesta", propuesta)
+                                .addValue("operacion", operacion)
+                                .addValue("seleccionada", seleccionada)
+                                .addValue("valor", textoJson(valorPropuesto))
+                                .addValue("estado", estado)
+                                .addValue("mensajes", mensajes.toString()));
+        if (filas != 1) throw new ApiException(409, "La propuesta cambió durante la revisión.");
+    }
+
+    public void registrarRevision(UUID propuesta, UUID actor, String revision) {
+        int filas =
+                jdbc.update(
+                        """
+                        update uml_colaborativo.propuesta_inteligente
+                        set revisado_por=:actor,revisado_en=clock_timestamp(),
+                            actualizado_en=clock_timestamp()
+                        where id=:propuesta and estado='LISTO'
+                          and actualizado_en=cast(:revision as timestamptz)
+                        """,
+                        Map.of(
+                                "propuesta", propuesta,
+                                "actor", actor,
+                                "revision", revision));
+        if (filas != 1)
+            throw new ApiException(
+                    409, "La propuesta fue modificada por otra persona. Vuelve a cargarla.");
+    }
+
     public PropuestaBloqueada bloquear(UUID modelo, UUID propuesta) {
         return jdbc
                 .query(
                         """
-                        select p.id,s.id_modelo,m.id_proyecto,s.revision_base,m.revision_actual,p.estado
+                        select p.id,s.id_modelo,m.id_proyecto,s.revision_base,m.revision_actual,
+                               p.estado,p.actualizado_en::text revision_edicion
                         from uml_colaborativo.propuesta_inteligente p
                         join uml_colaborativo.solicitud_inteligente s on s.id=p.id_solicitud
                         join uml_colaborativo.modelo_uml m on m.id=s.id_modelo
@@ -363,7 +483,8 @@ public class IaRepositorio {
                                         r.getObject("id_proyecto", UUID.class),
                                         r.getLong("revision_base"),
                                         r.getLong("revision_actual"),
-                                        r.getString("estado")))
+                                        r.getString("estado"),
+                                        r.getString("revision_edicion")))
                 .stream()
                 .findFirst()
                 .orElseThrow(() -> new ApiException(404, "Propuesta no disponible."));
@@ -411,8 +532,21 @@ public class IaRepositorio {
                           select 1 from uml_colaborativo.dependencia_operacion_propuesta d
                           join uml_colaborativo.operacion_propuesta o on o.id=d.id_operacion
                           join uml_colaborativo.operacion_propuesta requerida on requerida.id=d.id_operacion_requerida
-                          where o.id_propuesta=:propuesta and o.esta_seleccionado and o.estado='VALIDO'
+                          where o.id_propuesta=:propuesta and o.esta_seleccionado
                             and (not requerida.esta_seleccionado or requerida.estado<>'VALIDO')
+                        )
+                        """,
+                        Map.of("propuesta", propuesta),
+                        Boolean.class));
+    }
+
+    public boolean operacionesSeleccionadasInvalidas(UUID propuesta) {
+        return Boolean.TRUE.equals(
+                jdbc.queryForObject(
+                        """
+                        select exists(
+                          select 1 from uml_colaborativo.operacion_propuesta
+                          where id_propuesta=:propuesta and esta_seleccionado and estado<>'VALIDO'
                         )
                         """,
                         Map.of("propuesta", propuesta),
@@ -471,6 +605,10 @@ public class IaRepositorio {
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("JSON persistido inválido", e);
         }
+    }
+
+    private String textoJson(JsonNode valor) {
+        return valor == null || valor.isNull() ? null : valor.toString();
     }
 
     private String justificacion(JsonNode mensajes) {

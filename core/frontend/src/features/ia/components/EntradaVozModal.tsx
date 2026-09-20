@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { solicitarTexto, solicitarVoz } from '../api/iaApi';
 
+const DURACION_MAXIMA = 120;
+
 type ResultadoReconocimiento = {
   0: { transcript: string };
   isFinal: boolean;
@@ -47,6 +49,7 @@ export function EntradaVozModal({
   const [segundos, setSegundos] = useState(0);
   const [texto, setTexto] = useState('');
   const [audio, setAudio] = useState<Blob | null>(null);
+  const [vistaAudio, setVistaAudio] = useState('');
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState('');
   const reconocimiento = useRef<Reconocimiento | null>(null);
@@ -59,6 +62,22 @@ export function EntradaVozModal({
     const reloj = window.setInterval(() => setSegundos((actual) => actual + 1), 1000);
     return () => window.clearInterval(reloj);
   }, [grabando]);
+
+  useEffect(() => {
+    if (!grabando || segundos < DURACION_MAXIMA) return;
+    if (grabador.current?.state === 'recording') grabador.current.stop();
+    setError('La grabación se detuvo al alcanzar el límite de 120 segundos.');
+  }, [grabando, segundos]);
+
+  useEffect(() => {
+    if (!audio) {
+      setVistaAudio('');
+      return;
+    }
+    const url = URL.createObjectURL(audio);
+    setVistaAudio(url);
+    return () => URL.revokeObjectURL(url);
+  }, [audio]);
 
   useEffect(
     () => () => {
@@ -130,7 +149,7 @@ export function EntradaVozModal({
     try {
       const resultado = modoGrabacion
         ? audio
-          ? await solicitarVoz(modelo, audio, texto)
+          ? await solicitarVoz(modelo, audio, texto, Math.max(1, segundos))
           : null
         : texto.trim()
           ? await solicitarTexto(modelo, texto.trim())
@@ -183,7 +202,11 @@ export function EntradaVozModal({
                 ))}
               </div>
               <p className="ia-recording-time">
-                {audio ? 'Audio listo' : grabando ? `Grabando · ${segundos} s` : 'Sin grabación'}
+                {audio
+                  ? `Audio listo · ${segundos} s`
+                  : grabando
+                    ? `Grabando · ${segundos} / ${DURACION_MAXIMA} s`
+                    : 'Sin grabación'}
               </p>
               <button
                 className={grabando ? 'danger' : 'primary'}
@@ -192,6 +215,11 @@ export function EntradaVozModal({
               >
                 {grabando ? 'Detener grabación' : 'Grabar audio'}
               </button>
+              {vistaAudio && (
+                <audio className="ia-audio-preview" controls preload="metadata" src={vistaAudio}>
+                  Tu navegador no permite reproducir esta grabación.
+                </audio>
+              )}
             </>
           )}
           <label className="ia-prompt-label" htmlFor="ia-voice-text">

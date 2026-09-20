@@ -35,8 +35,9 @@ public class IaControlador {
             @AuthenticationPrincipal Identidad actor,
             @PathVariable UUID modelo,
             @RequestPart("archivo") MultipartFile archivo,
-            @RequestPart(value = "texto", required = false) String texto) {
-        return resultado(servicio.solicitarVoz(actor, modelo, archivo, texto));
+            @RequestPart(value = "texto", required = false) String texto,
+            @RequestParam(value = "duracionSegundos", required = false) Integer duracionSegundos) {
+        return resultado(servicio.solicitarVoz(actor, modelo, archivo, texto, duracionSegundos));
     }
 
     @PostMapping(value = "/solicitud/imagen", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -62,6 +63,15 @@ public class IaControlador {
             @PathVariable UUID modelo,
             @PathVariable UUID propuesta) {
         return servicio.detalle(actor, modelo, propuesta);
+    }
+
+    @PutMapping("/propuestas/{propuesta}")
+    Propuesta revisar(
+            @AuthenticationPrincipal Identidad actor,
+            @PathVariable UUID modelo,
+            @PathVariable UUID propuesta,
+            @Valid @RequestBody RevisionPropuesta revision) {
+        return servicio.revisar(actor, modelo, propuesta, revision);
     }
 
     @PostMapping("/propuestas/{propuesta}/aplicar")

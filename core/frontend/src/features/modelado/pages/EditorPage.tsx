@@ -300,6 +300,11 @@ export function EditorPage({
               abrirRevision={() => setVerPropuestaIa(true)}
             />
           )}
+          {!puedeEditar && propuestaIa && (
+            <button disabled={m.enviando} onClick={() => setVerPropuestaIa(true)}>
+              Ver propuesta IA pendiente
+            </button>
+          )}
           {puedeOrganizar && (
             <button
               disabled={bloqueado || !!borrador}
@@ -430,7 +435,9 @@ export function EditorPage({
         <RevisarPropuestaDialog
           modelo={m.modelo.id}
           propuesta={propuestaIa}
+          soloLectura={!puedeEditar}
           cerrar={() => setVerPropuestaIa(false)}
+          alActualizar={setPropuestaIa}
           alAplicar={async () => {
             setVerPropuestaIa(false);
             setPropuestaIa(null);

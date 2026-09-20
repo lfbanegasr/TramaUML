@@ -52,12 +52,23 @@ test('CU21-CU25 permite revisar, aplicar y rechazar sin alterar el modelo antes 
   let modelo = await (await page.request.get('/api/modelos/' + proyecto.idModelo)).json();
   expect(modelo.clases).toHaveLength(0);
 
+  await page.getByText('Crear Clase · Cliente', { exact: true }).click();
+  const editor = page.getByLabel('Datos propuestos de operación 1');
+  const claseCorregida = JSON.parse(await editor.inputValue()) as Record<string, unknown>;
+  claseCorregida.nombre = 'ClientePreferente';
+  await editor.fill(JSON.stringify(claseCorregida, null, 2));
+  const revision = page.waitForResponse(
+    (r) => r.url().includes('/ia/propuestas/') && r.request().method() === 'PUT',
+  );
+  await page.getByRole('button', { name: 'Guardar y revalidar', exact: true }).click();
+  expect((await revision).status()).toBe(200);
+
   const aplicacion = page.waitForResponse(
     (r) => r.url().endsWith('/aplicar') && r.request().method() === 'POST',
   );
   await page.getByRole('button', { name: 'Aplicar propuesta', exact: true }).click();
   expect((await aplicacion).status()).toBe(200);
-  await expect(page.locator('.outline')).toContainText('Cliente');
+  await expect(page.locator('.outline')).toContainText('ClientePreferente');
   await expect(page.locator('.outline')).toContainText('Pedido');
   modelo = await (await page.request.get('/api/modelos/' + proyecto.idModelo)).json();
   expect(modelo.revision).toBe(2);
@@ -77,7 +88,7 @@ test('CU21-CU25 permite revisar, aplicar y rechazar sin alterar el modelo antes 
   modelo = await (await page.request.get('/api/modelos/' + proyecto.idModelo)).json();
   expect(modelo.revision).toBe(2);
   expect(modelo.clases.map((clase: { nombre: string }) => clase.nombre).sort()).toEqual([
-    'Cliente',
+    'ClientePreferente',
     'Pedido',
   ]);
 });
