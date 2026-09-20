@@ -251,7 +251,7 @@ public class GeneracionRepositorio {
                                 "{\"totalClases\":"
                                         + totalClases
                                         + ",\"motor\":\"MotorGeneracionSpringBoot\","
-                                        + "\"version\":\"0.7.0\"}"));
+                                        + "\"version\":\"0.10.0\"}"));
         return id;
     }
 

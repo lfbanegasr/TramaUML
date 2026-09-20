@@ -70,8 +70,8 @@ export function SesionesPanel({ cerrar }: { cerrar: () => void }) {
           datos && (
             <>
               <p className="muted">
-                {datos.total} sesión{datos.total !== 1 ? 'es' : ''} registrada
-                {datos.total !== 1 ? 's' : ''} · las más recientes primero
+                {datos.total === 1 ? '1 sesión registrada' : `${datos.total} sesiones registradas`}{' '}
+                · las más recientes primero
               </p>
               {datos.sesiones.length === 0 ? (
                 <p className="empty">No hay sesiones registradas.</p>

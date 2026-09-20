@@ -50,6 +50,15 @@ test('acceso, proyectos autorizados y cierre de sesión real', async ({ page }) 
   await expect(page.getByRole('button', { name: /Entrar a la plataforma/ })).toBeVisible();
   expect((await page.request.get('/api/proyectos')).status()).toBe(401);
 });
+test('el usuario consulta su historial de sesiones desde la interfaz', async ({ page }) => {
+  await entrar(page);
+  await page.getByRole('button', { name: /Mis sesiones/ }).click();
+  await expect(page.getByRole('heading', { name: 'Historial de sesiones' })).toBeVisible();
+  await expect(page.getByText(/sesión registrada|sesiones registradas/)).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'Activa', exact: true }).first()).toBeVisible();
+  await page.getByRole('button', { name: 'Cerrar', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Historial de sesiones' })).toHaveCount(0);
+});
 test('clases, atributos corregibles, operaciones, parámetros y relaciones persisten', async ({
   page,
 }) => {

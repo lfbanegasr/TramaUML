@@ -4,9 +4,11 @@
 -- Reversión:
 --   DROP FUNCTION IF EXISTS uml_colaborativo.guardar_version_modelo_restaurada(uuid,bigint,uuid,text,uuid);
 --   DELETE FROM uml_colaborativo.rol_permiso
---     WHERE nombre_permiso IN ('VER_HISTORIAL_MODELO','RESTAURAR_MODELO');
---   DELETE FROM uml_colaborativo.permiso_disponible
---     WHERE nombre IN ('VER_HISTORIAL_MODELO','RESTAURAR_MODELO');
+--     WHERE id_permiso IN (
+--       SELECT id FROM uml_colaborativo.permiso
+--       WHERE codigo IN ('VER_HISTORIAL_MODELO','RESTAURAR_MODELO'));
+--   DELETE FROM uml_colaborativo.permiso
+--     WHERE codigo IN ('VER_HISTORIAL_MODELO','RESTAURAR_MODELO');
 BEGIN;
 
 -- 1. Permisos de dominio
@@ -16,16 +18,26 @@ VALUES
     ('RESTAURAR_MODELO', 'MODELADO', 'RESTAURAR', 'Restaurar el modelo a una versión anterior como nueva versión', 'PROYECTO')
 ON CONFLICT (codigo) DO NOTHING;
 
--- COLABORADOR: lectura de historial.
+-- Los códigos vigentes son PROPIETARIO_PROYECTO, EDITOR_PROYECTO y
+-- LECTOR_PROYECTO. LIDER/COLABORADOR se conservan como alias compatibles.
+-- Todos los roles del proyecto pueden consultar el historial.
 INSERT INTO uml_colaborativo.rol_permiso (id_rol, id_permiso)
 SELECT r.id, p.id FROM uml_colaborativo.rol r, uml_colaborativo.permiso p
-WHERE r.nombre = 'COLABORADOR' AND p.codigo = 'VER_HISTORIAL_MODELO'
+WHERE (
+        r.codigo IN (
+            'PROPIETARIO_PROYECTO', 'EDITOR_PROYECTO', 'LECTOR_PROYECTO',
+            'LIDER', 'COLABORADOR')
+        OR upper(r.nombre) IN ('LIDER', 'COLABORADOR'))
+  AND p.codigo = 'VER_HISTORIAL_MODELO'
 ON CONFLICT DO NOTHING;
 
--- LIDER: lectura + restauración.
+-- Solo el propietario/líder recibe restauración por defecto.
 INSERT INTO uml_colaborativo.rol_permiso (id_rol, id_permiso)
 SELECT r.id, p.id FROM uml_colaborativo.rol r, uml_colaborativo.permiso p
-WHERE r.nombre = 'LIDER' AND p.codigo IN ('VER_HISTORIAL_MODELO', 'RESTAURAR_MODELO')
+WHERE (
+        r.codigo IN ('PROPIETARIO_PROYECTO', 'LIDER')
+        OR upper(r.nombre) = 'LIDER')
+  AND p.codigo = 'RESTAURAR_MODELO'
 ON CONFLICT DO NOTHING;
 
 COMMIT;
@@ -154,4 +166,3 @@ $$;
 
 REVOKE ALL ON FUNCTION uml_colaborativo.guardar_version_modelo_restaurada(uuid,bigint,uuid,text,uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION uml_colaborativo.guardar_version_modelo_restaurada(uuid,bigint,uuid,text,uuid) TO uml_app;
-

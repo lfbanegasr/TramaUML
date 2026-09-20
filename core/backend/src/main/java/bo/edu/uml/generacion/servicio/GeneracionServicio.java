@@ -46,7 +46,7 @@ public class GeneracionServicio {
                                         nombreSeguro(c.nombre()),
                                         "com.empresa",
                                         nombreSeguro(c.nombre()),
-                                        "com.empresa." + nombreSeguro(c.nombre()),
+                                        "com.empresa." + segmentoPaqueteSeguro(c.nombre()),
                                         "1.0.0-SNAPSHOT",
                                         true,
                                         true,
@@ -103,7 +103,7 @@ public class GeneracionServicio {
                                                 nombreSeguro(c.nombre()),
                                                 "com.empresa",
                                                 nombreSeguro(c.nombre()),
-                                                "com.empresa." + nombreSeguro(c.nombre()),
+                                                "com.empresa." + segmentoPaqueteSeguro(c.nombre()),
                                                 "1.0.0-SNAPSHOT",
                                                 true,
                                                 true,
@@ -208,6 +208,13 @@ public class GeneracionServicio {
                 .replaceAll("[^a-z0-9\\-]", "-")
                 .replaceAll("-+", "-")
                 .replaceAll("^-|-$", "");
+    }
+
+    private String segmentoPaqueteSeguro(String nombre) {
+        if (nombre == null) return "proyecto";
+        String segmento = nombre.toLowerCase().replaceAll("[^a-z0-9]", "");
+        if (segmento.isBlank()) return "proyecto";
+        return Character.isDigit(segmento.charAt(0)) ? "p" + segmento : segmento;
     }
 
     private boolean bool(Object o) {

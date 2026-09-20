@@ -259,6 +259,57 @@ class NucleoIntegracionTest {
     }
 
     @Test
+    void historialSesionesPropioYAdministrativoRespetaPaginacionYPermisos() throws Exception {
+        var administrador = login(usuario, clave);
+        String nombre = "sesiones_" + UUID.randomUUID().toString().substring(0, 8);
+        UUID cuenta = fixture(nombre);
+        var primera = login(nombre, clave);
+        var segunda = login(nombre, clave);
+
+        mvc.perform(autorizado(post("/api/acceso/salir"), primera))
+                .andExpect(status().isNoContent());
+
+        var propias =
+                respuesta(
+                        mvc.perform(
+                                        autorizado(
+                                                get("/api/acceso/sesiones")
+                                                        .param("pagina", "0")
+                                                        .param("tamano", "1"),
+                                                segunda))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.pagina").value(0))
+                                .andExpect(jsonPath("$.tamano").value(1))
+                                .andExpect(jsonPath("$.total").value(2))
+                                .andExpect(jsonPath("$.sesiones.length()").value(1)));
+        assertThat(propias.get("sesiones").get(0).get("activa").asBoolean()).isTrue();
+
+        var administrativas =
+                respuesta(
+                        mvc.perform(
+                                        autorizado(
+                                                get("/api/administracion/usuarios/"
+                                                                + cuenta
+                                                                + "/sesiones")
+                                                        .param("tamano", "20"),
+                                                administrador))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.total").value(2)));
+        assertThat(administrativas.get("sesiones"))
+                .anySatisfy(
+                        sesion -> {
+                            assertThat(sesion.get("activa").asBoolean()).isFalse();
+                            assertThat(sesion.get("motivoRevocacion").asText())
+                                    .isEqualTo("CIERRE_USUARIO");
+                        });
+
+        mvc.perform(autorizado(get("/api/administracion/usuarios/" + admin + "/sesiones"), segunda))
+                .andExpect(status().isForbidden());
+        mvc.perform(autorizado(get("/api/acceso/sesiones").param("tamano", "101"), segunda))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void bloqueoPersistente() throws Exception {
         String u = "intentos_" + UUID.randomUUID();
         UUID id = fixture(u);
@@ -702,6 +753,17 @@ class NucleoIntegracionTest {
                 "select id from uml_colaborativo.permiso where codigo=?", UUID.class, codigo);
     }
 
+    private Set<String> permisosRol(String codigo) {
+        return new HashSet<>(
+                jdbc.queryForList(
+                        "select p.codigo from uml_colaborativo.rol r join"
+                                + " uml_colaborativo.rol_permiso rp on rp.id_rol=r.id join"
+                                + " uml_colaborativo.permiso p on p.id=rp.id_permiso where"
+                                + " r.codigo=?",
+                        String.class,
+                        codigo));
+    }
+
     private Map<String, Object> datosUsuario(String u, List<UUID> roles) {
         return new HashMap<>(
                 Map.of(
@@ -863,6 +925,29 @@ class NucleoIntegracionTest {
         d.put("codigo", "SUPERADMINISTRADOR");
         escribir(a, put("/api/administracion/roles/" + rol("SUPERADMINISTRADOR")), d)
                 .andExpect(status().isUnprocessableEntity());
+    }
+
+    @Test
+    void permisosDeHistorialEInteroperabilidadUsanRolesVigentes() {
+        assertThat(permisosRol("PROPIETARIO_PROYECTO"))
+                .contains(
+                        "VER_HISTORIAL_MODELO",
+                        "RESTAURAR_MODELO",
+                        "EXPORTAR_XMI",
+                        "IMPORTAR_XMI",
+                        "CONFIGURAR_BACKEND",
+                        "GENERAR_BACKEND",
+                        "DESCARGAR_ARTEFACTO");
+        assertThat(permisosRol("EDITOR_PROYECTO"))
+                .contains(
+                        "VER_HISTORIAL_MODELO",
+                        "EXPORTAR_XMI",
+                        "IMPORTAR_XMI",
+                        "DESCARGAR_ARTEFACTO")
+                .doesNotContain("RESTAURAR_MODELO", "CONFIGURAR_BACKEND", "GENERAR_BACKEND");
+        assertThat(permisosRol("LECTOR_PROYECTO"))
+                .contains("VER_HISTORIAL_MODELO")
+                .doesNotContain("RESTAURAR_MODELO", "EXPORTAR_XMI", "GENERAR_BACKEND");
     }
 
     private Map<String, Object> datosMiembro(
@@ -3570,6 +3655,54 @@ class NucleoIntegracionTest {
         // Magic bytes del formato ZIP: PK\x03\x04
         assertThat(bytes[0]).isEqualTo((byte) 0x50);
         assertThat(bytes[1]).isEqualTo((byte) 0x4B);
+    }
+
+    @Test
+    void interoperabilidadAutorizaRolesRealesSinDependerDelSuperadministrador() throws Exception {
+        var administrador = login(usuario, clave);
+        var proyecto = proyecto(administrador);
+        UUID idProyecto = UUID.fromString(proyecto.get("id").asText());
+        String modelo = proyecto.get("idModelo").asText();
+        enviar(
+                        administrador,
+                        modelo,
+                        cambio(1, UUID.randomUUID(), clase(UUID.randomUUID(), "Interoperable")))
+                .andExpect(status().isOk());
+
+        String editorNombre = "xmi_editor_" + UUID.randomUUID().toString().substring(0, 8);
+        UUID editorId = fixture(editorNombre);
+        miembroFixture(idProyecto, editorId, "EDITOR_PROYECTO");
+        var editor = login(editorNombre, clave);
+        escribir(
+                        editor,
+                        post("/api/modelos/" + modelo + "/xmi/exportar"),
+                        Map.of("idSolicitud", UUID.randomUUID(), "descripcion", "Rol editor"))
+                .andExpect(status().isOk());
+        mvc.perform(autorizado(get("/api/modelos/" + modelo + "/generacion/configuracion"), editor))
+                .andExpect(status().isForbidden());
+
+        String propietarioNombre = "gen_prop_" + UUID.randomUUID().toString().substring(0, 8);
+        UUID propietarioId = fixture(propietarioNombre);
+        miembroFixture(idProyecto, propietarioId, "PROPIETARIO_PROYECTO");
+        var propietario = login(propietarioNombre, clave);
+        mvc.perform(
+                        autorizado(
+                                get("/api/modelos/" + modelo + "/generacion/configuracion"),
+                                propietario))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.paqueteBase").value("com.empresa.modelodeclases"));
+        mvc.perform(autorizado(post("/api/modelos/" + modelo + "/generacion/generar"), propietario))
+                .andExpect(status().isOk());
+
+        String lectorNombre = "xmi_lector_" + UUID.randomUUID().toString().substring(0, 8);
+        UUID lectorId = fixture(lectorNombre);
+        miembroFixture(idProyecto, lectorId, "LECTOR_PROYECTO");
+        var lector = login(lectorNombre, clave);
+        escribir(
+                        lector,
+                        post("/api/modelos/" + modelo + "/xmi/exportar"),
+                        Map.of("idSolicitud", UUID.randomUUID(), "descripcion", "Rol lector"))
+                .andExpect(status().isForbidden());
     }
 
     @Test

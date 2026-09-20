@@ -32,22 +32,29 @@ VALUES
      'PROYECTO')
 ON CONFLICT (codigo) DO NOTHING;
 
--- 2. Asignación a roles predeterminados del proyecto
--- LIDER: acceso completo a exportación XMI y generación de backend.
+-- 2. Asignación a roles predeterminados del proyecto. Los códigos vigentes
+-- son PROPIETARIO_PROYECTO y EDITOR_PROYECTO; LIDER/COLABORADOR se aceptan
+-- como alias para instalaciones anteriores.
+-- Propietario/LIDER: acceso completo a interoperabilidad y generación.
 INSERT INTO uml_colaborativo.rol_permiso (id_rol, id_permiso)
 SELECT r.id, p.id
 FROM uml_colaborativo.rol r, uml_colaborativo.permiso p
-WHERE r.nombre = 'LIDER'
+WHERE (
+        r.codigo IN ('PROPIETARIO_PROYECTO', 'LIDER')
+        OR upper(r.nombre) = 'LIDER')
   AND p.codigo IN ('EXPORTAR_XMI', 'IMPORTAR_XMI', 'CONFIGURAR_BACKEND',
                    'GENERAR_BACKEND', 'DESCARGAR_ARTEFACTO')
 ON CONFLICT DO NOTHING;
 
--- COLABORADOR: solo puede exportar XMI (lectura del modelo) y descargar artefactos generados.
+-- Editor/COLABORADOR: intercambio XMI y descarga. Los permisos de configuración
+-- y generación no se amplían sin una decisión académica explícita.
 INSERT INTO uml_colaborativo.rol_permiso (id_rol, id_permiso)
 SELECT r.id, p.id
 FROM uml_colaborativo.rol r, uml_colaborativo.permiso p
-WHERE r.nombre = 'COLABORADOR'
-  AND p.codigo IN ('EXPORTAR_XMI', 'DESCARGAR_ARTEFACTO')
+WHERE (
+        r.codigo IN ('EDITOR_PROYECTO', 'COLABORADOR')
+        OR upper(r.nombre) = 'COLABORADOR')
+  AND p.codigo IN ('EXPORTAR_XMI', 'IMPORTAR_XMI', 'DESCARGAR_ARTEFACTO')
 ON CONFLICT DO NOTHING;
 
 -- 3. Persistencia binaria para artefactos generados (XMI y ZIP)

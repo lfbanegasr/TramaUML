@@ -1,5 +1,7 @@
 package bo.edu.uml.compartido;
 
+import jakarta.validation.ConstraintViolationException;
+
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.ResponseEntity;
@@ -27,6 +29,7 @@ public class ErroresApi {
     @ExceptionHandler({
         MethodArgumentNotValidException.class,
         HttpMessageNotReadableException.class,
+        ConstraintViolationException.class,
         IllegalArgumentException.class
     })
     ResponseEntity<?> entrada(Exception e) {
