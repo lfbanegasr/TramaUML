@@ -39,6 +39,42 @@ test('exporta y descarga un XMI desde el editor', async ({ page }) => {
   await expect(resultado).toContainText('1 clases exportadas');
 });
 
+test('importa un XMI mediante previsualización y confirmación explícita', async ({ page }) => {
+  await modeloConClase(page, 'Existente');
+  await page.getByRole('button', { name: 'Importar XMI', exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Importar XMI de Enterprise Architect' }),
+  ).toBeVisible();
+  const xmi = `<?xml version="1.0" encoding="UTF-8"?>
+  <xmi:XMI xmi:version="2.1"
+      xmlns:xmi="http://schema.omg.org/spec/XMI/2.1"
+      xmlns:uml="http://schema.omg.org/spec/UML/2.1">
+    <xmi:Documentation exporter="Enterprise Architect" exporterVersion="16.1"/>
+    <uml:Model xmi:id="modelo" name="Importado">
+      <packagedElement xmi:type="uml:Class" xmi:id="cliente_importado" name="Importada">
+        <ownedAttribute xmi:type="uml:Property" xmi:id="codigo" name="codigo"
+            visibility="private" type="String"/>
+      </packagedElement>
+    </uml:Model>
+  </xmi:XMI>`;
+  await page.locator('.xmi-drop-zone input[type=file]').setInputFiles({
+    name: 'modelo-ea.xmi',
+    mimeType: 'application/xml',
+    buffer: Buffer.from(xmi),
+  });
+  await expect(page.getByText('modelo-ea.xmi', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Analizar archivo', exact: true }).click();
+  await expect(page.getByRole('dialog')).toContainText('CLASE Importada');
+  await expect(page.getByTestId('clase-uml').filter({ hasText: 'Importada' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Aplicar importación', exact: true }).click();
+  await expect(page.getByRole('dialog').getByRole('status')).toContainText(
+    'Importación aplicada y versionada',
+  );
+  await page.getByRole('button', { name: 'Cerrar', exact: true }).click();
+  await expect(page.getByTestId('clase-uml').filter({ hasText: 'Importada' })).toBeVisible();
+  await expect(page.getByTestId('clase-uml').filter({ hasText: 'Existente' })).toBeVisible();
+});
+
 test('configura, genera y descarga un backend desde el editor', async ({ page }) => {
   await modeloConClase(page, 'Generable');
   await page.getByRole('button', { name: 'Generar Backend', exact: true }).click();

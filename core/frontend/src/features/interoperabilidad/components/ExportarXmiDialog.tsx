@@ -1,21 +1,37 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { exportarXmi, descargarXmi, type ResultadoXmi } from '../api/xmiApi';
+import { listarVersiones, type ResumenVersion } from '../../historial/api/historialApi';
+import type { Paquete } from '../../modelado/api/modeladoApi';
 
 type Estado = 'idle' | 'exportando' | 'descargando' | 'completado' | 'error';
 
 export function ExportarXmiDialog({
   modelo,
   nombreModelo,
+  versionVigente,
+  paquetes,
   cerrar,
 }: {
   modelo: string;
   nombreModelo: string;
+  versionVigente: string;
+  paquetes: Paquete[];
   cerrar: () => void;
 }) {
   const [descripcion, setDescripcion] = useState('');
   const [estado, setEstado] = useState<Estado>('idle');
   const [resultado, setResultado] = useState<ResultadoXmi | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [versiones, setVersiones] = useState<ResumenVersion[]>([]);
+  const [version, setVersion] = useState(versionVigente);
+  const [paquete, setPaquete] = useState('');
+  const [incluirSubpaquetes, setIncluirSubpaquetes] = useState(true);
+
+  useEffect(() => {
+    listarVersiones(modelo, undefined, 100)
+      .then((pagina) => setVersiones(pagina.versiones))
+      .catch(() => setVersiones([]));
+  }, [modelo]);
 
   async function exportar() {
     setEstado('exportando');
@@ -24,6 +40,9 @@ export function ExportarXmiDialog({
       const res = await exportarXmi(modelo, {
         idSolicitud: crypto.randomUUID(),
         descripcion: descripcion || undefined,
+        idVersion: version,
+        idPaquete: paquete || undefined,
+        incluirSubpaquetes,
       });
       setResultado(res);
       setEstado('descargando');
@@ -59,22 +78,66 @@ export function ExportarXmiDialog({
 
         <div className="dialog-body">
           <p className="dialog-desc">
-            Genera un archivo <strong>.xmi</strong> compatible con Enterprise Architect 12-16+ para
-            el modelo <em>{nombreModelo}</em>. El archivo incluye clases, atributos, operaciones,
-            relaciones y paquetes.
+            Genera un archivo <strong>.xmi</strong> 2.1 interoperable para el modelo{' '}
+            <em>{nombreModelo}</em>. Puedes congelar una versión y limitar el alcance a un paquete.
           </p>
 
           {estado === 'idle' || estado === 'error' ? (
-            <div className="form-group">
-              <label htmlFor="xmi-descripcion">Descripción del intercambio (opcional)</label>
-              <input
-                id="xmi-descripcion"
-                type="text"
-                maxLength={500}
-                placeholder="Ej: Versión para revisión del arquitecto"
-                value={descripcion}
-                onChange={(e) => setDescripcion(e.target.value)}
-              />
+            <div className="xmi-export-options">
+              <div className="form-group">
+                <label htmlFor="xmi-version">Versión del modelo</label>
+                <select
+                  id="xmi-version"
+                  value={version}
+                  onChange={(e) => setVersion(e.target.value)}
+                >
+                  {versiones.length ? (
+                    versiones.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        Versión {v.numeroVersion} · revisión {v.revision}
+                      </option>
+                    ))
+                  ) : (
+                    <option value={versionVigente}>Versión vigente</option>
+                  )}
+                </select>
+              </div>
+              <div className="form-group">
+                <label htmlFor="xmi-paquete">Alcance</label>
+                <select
+                  id="xmi-paquete"
+                  value={paquete}
+                  onChange={(e) => setPaquete(e.target.value)}
+                >
+                  <option value="">Modelo completo</option>
+                  {paquetes.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      Paquete {p.nombre}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {paquete && (
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={incluirSubpaquetes}
+                    onChange={(e) => setIncluirSubpaquetes(e.target.checked)}
+                  />
+                  Incluir subpaquetes
+                </label>
+              )}
+              <div className="form-group">
+                <label htmlFor="xmi-descripcion">Descripción del intercambio (opcional)</label>
+                <input
+                  id="xmi-descripcion"
+                  type="text"
+                  maxLength={500}
+                  placeholder="Ej: Versión para revisión del arquitecto"
+                  value={descripcion}
+                  onChange={(e) => setDescripcion(e.target.value)}
+                />
+              </div>
             </div>
           ) : null}
 
@@ -99,9 +162,22 @@ export function ExportarXmiDialog({
                   <strong>{resultado.totalRelaciones}</strong> relaciones exportadas
                 </li>
                 <li>
+                  <strong>{resultado.totalPaquetes}</strong> paquetes exportados
+                </li>
+                <li>
                   Archivo: <code>{resultado.nombreArchivo}</code>
                 </li>
               </ul>
+              {resultado.advertencias.length > 0 && (
+                <div className="xmi-warnings">
+                  <strong>Advertencias de interoperabilidad</strong>
+                  <ul>
+                    {resultado.advertencias.map((advertencia) => (
+                      <li key={advertencia}>{advertencia}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           )}
           {estado === 'error' && error && (

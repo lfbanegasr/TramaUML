@@ -20,6 +20,7 @@ import { ConflictosPanel } from '../../colaboracion/components/ConflictosPanel';
 import { listarConflictos } from '../../colaboracion/api/conflictosApi';
 import { HistorialPage } from '../../historial/pages/HistorialPage';
 import { ExportarXmiDialog } from '../../interoperabilidad/components/ExportarXmiDialog';
+import { ImportarXmiDialog } from '../../interoperabilidad/components/ImportarXmiDialog';
 import { GenerarBackendDialog } from '../../interoperabilidad/components/GenerarBackendDialog';
 import { BotonAsistenteIa } from '../../ia/components/BotonAsistenteIa';
 import { EntradaVozModal } from '../../ia/components/EntradaVozModal';
@@ -49,6 +50,7 @@ export function EditorPage({
   const cambiarTotalConflictos = useCallback((total: number) => setTotalConflictos(total), []);
   const [verHistorial, setVerHistorial] = useState(false);
   const [verExportarXmi, setVerExportarXmi] = useState(false);
+  const [verImportarXmi, setVerImportarXmi] = useState(false);
   const [verGenerarBackend, setVerGenerarBackend] = useState(false);
   const [verVozIa, setVerVozIa] = useState(false);
   const [verImagenIa, setVerImagenIa] = useState(false);
@@ -282,6 +284,15 @@ export function EditorPage({
           >
             Exportar XMI
           </button>
+          {puedeEditar && (
+            <button
+              id="btn-importar-xmi"
+              onClick={() => setVerImportarXmi(true)}
+              disabled={bloqueado || !!borrador}
+            >
+              Importar XMI
+            </button>
+          )}
           <button
             id="btn-generar-backend"
             onClick={() => setVerGenerarBackend(true)}
@@ -407,7 +418,19 @@ export function EditorPage({
         <ExportarXmiDialog
           modelo={m.modelo.id}
           nombreModelo={m.modelo.nombre}
+          versionVigente={m.modelo.idVersion}
+          paquetes={m.modelo.paquetes}
           cerrar={() => setVerExportarXmi(false)}
+        />
+      )}
+      {verImportarXmi && m.sesion && (
+        <ImportarXmiDialog
+          modelo={m.modelo.id}
+          sesion={m.sesion.id}
+          cerrar={() => setVerImportarXmi(false)}
+          alAplicar={async () => {
+            await m.recargar();
+          }}
         />
       )}
       {verGenerarBackend && (

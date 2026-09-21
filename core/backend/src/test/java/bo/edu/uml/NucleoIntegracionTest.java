@@ -3876,6 +3876,406 @@ class NucleoIntegracionTest {
     }
 
     @Test
+    void exportacionXmiRespetaVersionPaqueteYAdvierteRelacionesOmitidas() throws Exception {
+        var c = login(usuario, clave);
+        var p = proyecto(c);
+        String modelo = p.get("idModelo").asText();
+        UUID paquete = UUID.randomUUID();
+        UUID dentro = UUID.randomUUID();
+        UUID fuera = UUID.randomUUID();
+        UUID relacion = UUID.randomUUID();
+        Map<String, Object> crearPaquete =
+                Map.of(
+                        "operacion",
+                        "CREAR",
+                        "entidad",
+                        "PAQUETE",
+                        "idEntidad",
+                        paquete,
+                        "datos",
+                        Map.of("nombre", "dominio"));
+        Map<String, Object> crearDentro =
+                Map.of(
+                        "operacion",
+                        "CREAR",
+                        "entidad",
+                        "CLASE",
+                        "idEntidad",
+                        dentro,
+                        "datos",
+                        Map.of("nombre", "Dentro", "idPaquete", paquete, "x", 0, "y", 0));
+        Map<String, Object> crearFuera = clase(fuera, "Fuera");
+        Map<String, Object> crearRelacion =
+                Map.of(
+                        "operacion",
+                        "CREAR",
+                        "entidad",
+                        "RELACION",
+                        "idEntidad",
+                        relacion,
+                        "datos",
+                        Map.of(
+                                "origen",
+                                dentro,
+                                "destino",
+                                fuera,
+                                "tipo",
+                                "ASOCIACION",
+                                "minimoOrigen",
+                                1,
+                                "maximoOrigen",
+                                1,
+                                "minimoDestino",
+                                1,
+                                "maximoDestino",
+                                1));
+        var primera =
+                respuesta(
+                        enviar(
+                                        c,
+                                        modelo,
+                                        cambio(
+                                                1,
+                                                UUID.randomUUID(),
+                                                crearPaquete,
+                                                crearDentro,
+                                                crearFuera,
+                                                crearRelacion))
+                                .andExpect(status().isOk()));
+        String versionHistorica = primera.get("idVersion").asText();
+        enviar(c, modelo, cambio(2, UUID.randomUUID(), clase(UUID.randomUUID(), "Posterior")))
+                .andExpect(status().isOk());
+
+        var exportacion =
+                respuesta(
+                        mvc.perform(
+                                        autorizado(
+                                                        post(
+                                                                "/api/modelos/"
+                                                                        + modelo
+                                                                        + "/xmi/exportar"),
+                                                        c)
+                                                .contentType("application/json")
+                                                .content(
+                                                        json.writeValueAsString(
+                                                                Map.of(
+                                                                        "idSolicitud",
+                                                                        UUID.randomUUID(),
+                                                                        "idVersion",
+                                                                        versionHistorica,
+                                                                        "idPaquete",
+                                                                        paquete,
+                                                                        "incluirSubpaquetes",
+                                                                        false))))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.idVersion").value(versionHistorica))
+                                .andExpect(jsonPath("$.idPaquete").value(paquete.toString()))
+                                .andExpect(jsonPath("$.totalPaquetes").value(1))
+                                .andExpect(jsonPath("$.totalClases").value(1))
+                                .andExpect(jsonPath("$.totalRelaciones").value(0))
+                                .andExpect(jsonPath("$.advertencias.length()").value(1)));
+        String xml =
+                mvc.perform(
+                                autorizado(
+                                        get(
+                                                "/api/modelos/"
+                                                        + modelo
+                                                        + "/xmi/"
+                                                        + exportacion.get("idIntercambio").asText()
+                                                        + "/descargar"),
+                                        c))
+                        .andExpect(status().isOk())
+                        .andReturn()
+                        .getResponse()
+                        .getContentAsString();
+        assertThat(xml)
+                .contains("name=\"dominio\"", "name=\"Dentro\"")
+                .doesNotContain("name=\"Fuera\"", "name=\"Posterior\"");
+    }
+
+    @Test
+    void importacionXmiPrevisualizaYAplicaUnaSolaVersion() throws Exception {
+        var c = login(usuario, clave);
+        var p = proyecto(c);
+        String modelo = p.get("idModelo").asText();
+        UUID sesion = asegurarSesion(c, modelo);
+        String xmi =
+                """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <xmi:XMI xmi:version="2.1"
+                    xmlns:xmi="http://schema.omg.org/spec/XMI/2.1"
+                    xmlns:uml="http://schema.omg.org/spec/UML/2.1">
+                  <xmi:Documentation exporter="Enterprise Architect" exporterVersion="16.1"/>
+                  <uml:Model xmi:id="modelo" name="Ventas">
+                    <packagedElement xmi:type="uml:Package" xmi:id="dominio" name="dominio">
+                      <packagedElement xmi:type="uml:Class" xmi:id="cliente" name="Cliente">
+                        <ownedAttribute xmi:type="uml:Property" xmi:id="nombre" name="nombre"
+                            visibility="private" type="String"/>
+                      </packagedElement>
+                      <packagedElement xmi:type="uml:Class" xmi:id="pedido" name="Pedido"/>
+                    </packagedElement>
+                    <packagedElement xmi:type="uml:Association" xmi:id="cliente_pedido"
+                        name="realiza">
+                      <ownedEnd xmi:type="uml:Property" xmi:id="ext_cliente" type="cliente">
+                        <lowerValue value="1"/><upperValue value="1"/>
+                      </ownedEnd>
+                      <ownedEnd xmi:type="uml:Property" xmi:id="ext_pedido" type="pedido">
+                        <lowerValue value="0"/><upperValue value="*"/>
+                      </ownedEnd>
+                    </packagedElement>
+                  </uml:Model>
+                </xmi:XMI>
+                """;
+        MockMultipartFile archivo =
+                new MockMultipartFile("archivo", "ventas.xmi", "application/xml", xmi.getBytes());
+
+        var previa =
+                respuesta(
+                        mvc.perform(
+                                        autorizado(
+                                                multipart(
+                                                                "/api/modelos/"
+                                                                        + modelo
+                                                                        + "/xmi/importaciones")
+                                                        .file(archivo)
+                                                        .param(
+                                                                "idSolicitud",
+                                                                UUID.randomUUID().toString())
+                                                        .param("estrategia", "FUSIONAR"),
+                                                c))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.estado").value("LISTO_PARA_REVISION"))
+                                .andExpect(jsonPath("$.versionEnterpriseArchitect").value("16.1"))
+                                .andExpect(jsonPath("$.totalPaquetes").value(1))
+                                .andExpect(jsonPath("$.totalClases").value(2))
+                                .andExpect(jsonPath("$.totalAtributos").value(1))
+                                .andExpect(jsonPath("$.totalRelaciones").value(1))
+                                .andExpect(jsonPath("$.puedeAplicar").value(true)));
+
+        mvc.perform(autorizado(get("/api/modelos/" + modelo), c))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.revision").value(previa.get("revisionBase").asLong()))
+                .andExpect(jsonPath("$.clases").isEmpty());
+
+        String intercambio = previa.get("idIntercambio").asText();
+        long base = previa.get("revisionBase").asLong();
+        mvc.perform(
+                        autorizado(
+                                        post(
+                                                "/api/modelos/"
+                                                        + modelo
+                                                        + "/xmi/importaciones/"
+                                                        + intercambio
+                                                        + "/aplicar"),
+                                        c)
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of(
+                                                        "idSolicitud",
+                                                        UUID.randomUUID(),
+                                                        "idSesionEdicion",
+                                                        sesion,
+                                                        "revisionBase",
+                                                        base,
+                                                        "confirmar",
+                                                        true))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.estado").value("COMPLETADO"))
+                .andExpect(jsonPath("$.revision").value(base + 1))
+                .andExpect(jsonPath("$.idVersion").isNotEmpty());
+
+        mvc.perform(autorizado(get("/api/modelos/" + modelo), c))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.revision").value(base + 1))
+                .andExpect(jsonPath("$.clases.length()").value(2))
+                .andExpect(jsonPath("$.atributos.length()").value(1))
+                .andExpect(jsonPath("$.relaciones.length()").value(1));
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from uml_colaborativo.archivo_almacenado"
+                                        + " where categoria='ENTRADA_XMI' and id_proyecto=?",
+                                Integer.class,
+                                UUID.fromString(p.get("id").asText())))
+                .isEqualTo(1);
+    }
+
+    @Test
+    void importacionXmiObsoletaNoModificaElModelo() throws Exception {
+        var c = login(usuario, clave);
+        var p = proyecto(c);
+        String modelo = p.get("idModelo").asText();
+        UUID sesion = asegurarSesion(c, modelo);
+        String xmi =
+                """
+                <xmi:XMI xmi:version="2.1"
+                    xmlns:xmi="http://schema.omg.org/spec/XMI/2.1"
+                    xmlns:uml="http://schema.omg.org/spec/UML/2.1">
+                  <uml:Model xmi:id="m" name="M">
+                    <packagedElement xmi:type="uml:Class" xmi:id="importada" name="Importada"/>
+                  </uml:Model>
+                </xmi:XMI>
+                """;
+        MockMultipartFile archivo =
+                new MockMultipartFile("archivo", "modelo.xmi", "application/xml", xmi.getBytes());
+        var previa =
+                respuesta(
+                        mvc.perform(
+                                        autorizado(
+                                                multipart(
+                                                                "/api/modelos/"
+                                                                        + modelo
+                                                                        + "/xmi/importaciones")
+                                                        .file(archivo)
+                                                        .param(
+                                                                "idSolicitud",
+                                                                UUID.randomUUID().toString()),
+                                                c))
+                                .andExpect(status().isOk()));
+
+        long base = previa.get("revisionBase").asLong();
+        enviar(c, modelo, cambio(base, UUID.randomUUID(), clase(UUID.randomUUID(), "Manual")))
+                .andExpect(status().isOk());
+        mvc.perform(
+                        autorizado(
+                                        post(
+                                                "/api/modelos/"
+                                                        + modelo
+                                                        + "/xmi/importaciones/"
+                                                        + previa.get("idIntercambio").asText()
+                                                        + "/aplicar"),
+                                        c)
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of(
+                                                        "idSolicitud",
+                                                        UUID.randomUUID(),
+                                                        "idSesionEdicion",
+                                                        sesion,
+                                                        "revisionBase",
+                                                        base,
+                                                        "confirmar",
+                                                        true))))
+                .andExpect(status().isConflict());
+        mvc.perform(autorizado(get("/api/modelos/" + modelo), c))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.clases.length()").value(1))
+                .andExpect(jsonPath("$.clases[0].nombre").value("Manual"));
+    }
+
+    @Test
+    void importacionXmiPuedeReemplazarElContenidoAtomicamente() throws Exception {
+        var c = login(usuario, clave);
+        var p = proyecto(c);
+        String modelo = p.get("idModelo").asText();
+        UUID sesion = asegurarSesion(c, modelo);
+        enviar(c, modelo, cambio(1, UUID.randomUUID(), clase(UUID.randomUUID(), "Anterior")))
+                .andExpect(status().isOk());
+        String xmi =
+                """
+                <xmi:XMI xmi:version="2.1"
+                    xmlns:xmi="http://schema.omg.org/spec/XMI/2.1"
+                    xmlns:uml="http://schema.omg.org/spec/UML/2.1">
+                  <uml:Model xmi:id="m" name="M">
+                    <packagedElement xmi:type="uml:Class" xmi:id="nueva" name="Nueva"/>
+                  </uml:Model>
+                </xmi:XMI>
+                """;
+        MockMultipartFile archivo =
+                new MockMultipartFile(
+                        "archivo", "reemplazo.xmi", "application/xml", xmi.getBytes());
+        var previa =
+                respuesta(
+                        mvc.perform(
+                                        autorizado(
+                                                multipart(
+                                                                "/api/modelos/"
+                                                                        + modelo
+                                                                        + "/xmi/importaciones")
+                                                        .file(archivo)
+                                                        .param(
+                                                                "idSolicitud",
+                                                                UUID.randomUUID().toString())
+                                                        .param("estrategia", "REEMPLAZAR"),
+                                                c))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.estrategia").value("REEMPLAZAR"))
+                                .andExpect(jsonPath("$.operaciones[0].operacion").value("ELIMINAR"))
+                                .andExpect(
+                                        jsonPath("$.advertencias[0]")
+                                                .value(Matchers.containsString("eliminar"))));
+        mvc.perform(
+                        autorizado(
+                                        post(
+                                                "/api/modelos/"
+                                                        + modelo
+                                                        + "/xmi/importaciones/"
+                                                        + previa.get("idIntercambio").asText()
+                                                        + "/aplicar"),
+                                        c)
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of(
+                                                        "idSolicitud",
+                                                        UUID.randomUUID(),
+                                                        "idSesionEdicion",
+                                                        sesion,
+                                                        "revisionBase",
+                                                        previa.get("revisionBase").asLong(),
+                                                        "confirmar",
+                                                        true))))
+                .andExpect(status().isOk());
+        mvc.perform(autorizado(get("/api/modelos/" + modelo), c))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.clases.length()").value(1))
+                .andExpect(jsonPath("$.clases[0].nombre").value("Nueva"));
+    }
+
+    @Test
+    void importacionXmiInseguraQuedaFallidaYNoSeAplica() throws Exception {
+        var c = login(usuario, clave);
+        var p = proyecto(c);
+        String modelo = p.get("idModelo").asText();
+        String xmi =
+                """
+                <?xml version="1.0"?>
+                <!DOCTYPE xmi:XMI [<!ENTITY archivo SYSTEM "file:///etc/passwd">]>
+                <xmi:XMI xmlns:xmi="http://schema.omg.org/spec/XMI/2.1" xmi:version="2.1"
+                    xmlns:uml="http://schema.omg.org/spec/UML/2.1">
+                  <uml:Model xmi:id="m" name="&archivo;"/>
+                </xmi:XMI>
+                """;
+        MockMultipartFile archivo =
+                new MockMultipartFile("archivo", "inseguro.xmi", "application/xml", xmi.getBytes());
+
+        var previa =
+                respuesta(
+                        mvc.perform(
+                                        autorizado(
+                                                multipart(
+                                                                "/api/modelos/"
+                                                                        + modelo
+                                                                        + "/xmi/importaciones")
+                                                        .file(archivo)
+                                                        .param(
+                                                                "idSolicitud",
+                                                                UUID.randomUUID().toString()),
+                                                c))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.estado").value("FALLIDO"))
+                                .andExpect(jsonPath("$.puedeAplicar").value(false))
+                                .andExpect(jsonPath("$.detalleError").isNotEmpty()));
+        assertThat(
+                        jdbc.queryForObject(
+                                "select estado from uml_colaborativo.intercambio_xmi where id=?",
+                                String.class,
+                                UUID.fromString(previa.get("idIntercambio").asText())))
+                .isEqualTo("FALLIDO");
+    }
+
+    @Test
     void configuracionYGeneracionBackendYDescarga() throws Exception {
         var c = login(usuario, clave);
         var p = proyecto(c);
@@ -3983,6 +4383,29 @@ class NucleoIntegracionTest {
                         post("/api/modelos/" + modelo + "/xmi/exportar"),
                         Map.of("idSolicitud", UUID.randomUUID(), "descripcion", "Rol editor"))
                 .andExpect(status().isOk());
+        String xmiMinimo =
+                """
+                <xmi:XMI xmi:version="2.1"
+                    xmlns:xmi="http://schema.omg.org/spec/XMI/2.1"
+                    xmlns:uml="http://schema.omg.org/spec/UML/2.1">
+                  <uml:Model xmi:id="m" name="M">
+                    <packagedElement xmi:type="uml:Class" xmi:id="c" name="Importable"/>
+                  </uml:Model>
+                </xmi:XMI>
+                """;
+        mvc.perform(
+                        autorizado(
+                                multipart("/api/modelos/" + modelo + "/xmi/importaciones")
+                                        .file(
+                                                new MockMultipartFile(
+                                                        "archivo",
+                                                        "editor.xmi",
+                                                        "application/xml",
+                                                        xmiMinimo.getBytes()))
+                                        .param("idSolicitud", UUID.randomUUID().toString()),
+                                editor))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.estado").value("LISTO_PARA_REVISION"));
         mvc.perform(autorizado(get("/api/modelos/" + modelo + "/generacion/configuracion"), editor))
                 .andExpect(status().isForbidden());
 
@@ -4007,6 +4430,18 @@ class NucleoIntegracionTest {
                         lector,
                         post("/api/modelos/" + modelo + "/xmi/exportar"),
                         Map.of("idSolicitud", UUID.randomUUID(), "descripcion", "Rol lector"))
+                .andExpect(status().isForbidden());
+        mvc.perform(
+                        autorizado(
+                                multipart("/api/modelos/" + modelo + "/xmi/importaciones")
+                                        .file(
+                                                new MockMultipartFile(
+                                                        "archivo",
+                                                        "lector.xmi",
+                                                        "application/xml",
+                                                        xmiMinimo.getBytes()))
+                                        .param("idSolicitud", UUID.randomUUID().toString()),
+                                lector))
                 .andExpect(status().isForbidden());
     }
 

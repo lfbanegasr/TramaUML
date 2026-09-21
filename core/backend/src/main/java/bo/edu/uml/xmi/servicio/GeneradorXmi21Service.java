@@ -19,7 +19,7 @@ public class GeneradorXmi21Service {
     private static final String XMI_NS = "http://schema.omg.org/spec/XMI/2.1";
     private static final String UML_NS = "http://schema.omg.org/spec/UML/2.1";
     private static final String EXPORTER = "Plataforma UML Colaborativa";
-    private static final String EXPORTER_VERSION = "0.12.0";
+    private static final String EXPORTER_VERSION = "0.13.0";
 
     // ─── Punto de entrada ────────────────────────────────────────────────────
 
@@ -83,20 +83,41 @@ public class GeneradorXmi21Service {
         Map<String, List<Map<String, Object>>> atribPorClase = agrupar(atributos, "id_clase");
         Map<String, List<Map<String, Object>>> opPorClase = agrupar(operaciones, "id_clase");
         Map<String, List<Map<String, Object>>> paramPorOp = agrupar(parametros, "id_operacion");
+        Map<String, List<Map<String, Object>>> generalizacionesPorClase =
+                agrupar(
+                        relaciones.stream()
+                                .filter(r -> "GENERALIZACION".equals(str(r.get("tipo_relacion"))))
+                                .toList(),
+                        "id_clase_origen");
 
         // Paquetes raíz (sin padre) → recursivo
-        escribirPaquetes(w, null, paquetes, clases, atribPorClase, opPorClase, paramPorOp);
+        escribirPaquetes(
+                w,
+                null,
+                paquetes,
+                clases,
+                atribPorClase,
+                opPorClase,
+                paramPorOp,
+                generalizacionesPorClase);
 
         // Clases sin paquete (id_paquete == null)
         for (var c : clases) {
             if (c.get("id_paquete") == null) {
-                escribirClase(w, c, "    ", atribPorClase, opPorClase, paramPorOp);
+                escribirClase(
+                        w,
+                        c,
+                        "    ",
+                        atribPorClase,
+                        opPorClase,
+                        paramPorOp,
+                        generalizacionesPorClase);
             }
         }
 
         // Asociaciones (relaciones)
         for (var r : relaciones) {
-            escribirRelacion(w, r);
+            if (!"GENERALIZACION".equals(str(r.get("tipo_relacion")))) escribirRelacion(w, r);
         }
 
         w.write("  </uml:Model>\n");
@@ -114,7 +135,8 @@ public class GeneradorXmi21Service {
             List<Map<String, Object>> clases,
             Map<String, List<Map<String, Object>>> atribPorClase,
             Map<String, List<Map<String, Object>>> opPorClase,
-            Map<String, List<Map<String, Object>>> paramPorOp) {
+            Map<String, List<Map<String, Object>>> paramPorOp,
+            Map<String, List<Map<String, Object>>> generalizacionesPorClase) {
 
         for (var p : paquetes) {
             String padre = str(p.get("id_paquete_padre"));
@@ -133,12 +155,26 @@ public class GeneradorXmi21Service {
 
             // Sub-paquetes
             escribirPaquetes(
-                    w, str(p.get("id")), paquetes, clases, atribPorClase, opPorClase, paramPorOp);
+                    w,
+                    str(p.get("id")),
+                    paquetes,
+                    clases,
+                    atribPorClase,
+                    opPorClase,
+                    paramPorOp,
+                    generalizacionesPorClase);
 
             // Clases de este paquete
             for (var c : clases) {
                 if (str(p.get("id")).equals(str(c.get("id_paquete")))) {
-                    escribirClase(w, c, "      ", atribPorClase, opPorClase, paramPorOp);
+                    escribirClase(
+                            w,
+                            c,
+                            "      ",
+                            atribPorClase,
+                            opPorClase,
+                            paramPorOp,
+                            generalizacionesPorClase);
                 }
             }
 
@@ -154,7 +190,8 @@ public class GeneradorXmi21Service {
             String indent,
             Map<String, List<Map<String, Object>>> atribPorClase,
             Map<String, List<Map<String, Object>>> opPorClase,
-            Map<String, List<Map<String, Object>>> paramPorOp) {
+            Map<String, List<Map<String, Object>>> paramPorOp,
+            Map<String, List<Map<String, Object>>> generalizacionesPorClase) {
 
         String id = xmiId(str(c.get("id")));
         String nombre = str(c.get("nombre"));
@@ -182,6 +219,16 @@ public class GeneradorXmi21Service {
         // Operaciones
         for (var o : opPorClase.getOrDefault(str(c.get("id")), List.of())) {
             escribirOperacion(w, o, indent + "  ", paramPorOp);
+        }
+
+        for (var r : generalizacionesPorClase.getOrDefault(str(c.get("id")), List.of())) {
+            w.write(
+                    indent
+                            + "  <generalization xmi:type=\"uml:Generalization\" xmi:id=\""
+                            + xmiId(str(r.get("id")))
+                            + "\" general=\""
+                            + xmiId(str(r.get("id_clase_destino")))
+                            + "\"/>\n");
         }
 
         w.write(indent + "</packagedElement>\n");
@@ -300,21 +347,19 @@ public class GeneradorXmi21Service {
         String origen = xmiId(str(r.get("id_clase_origen")));
         String destino = xmiId(str(r.get("id_clase_destino")));
 
-        if ("uml:Generalization".equals(tipo)) {
-            // Herencia: elemento dentro de la clase
+        if ("uml:Dependency".equals(tipo)) {
             w.write(
-                    "    <packagedElement xmi:type=\"uml:Class\" xmi:id=\""
+                    "    <packagedElement xmi:type=\"uml:Dependency\" xmi:id=\""
                             + id
-                            + "_gen_wrapper\" name=\"\">\n");
-            w.write(
-                    "      <generalization xmi:type=\"uml:Generalization\" xmi:id=\""
-                            + id
-                            + "\" specific=\""
+                            + "\""
+                            + (nombre != null && !nombre.isBlank()
+                                    ? " name=\"" + esc(nombre) + "\""
+                                    : "")
+                            + " client=\""
                             + origen
-                            + "\" general=\""
+                            + "\" supplier=\""
                             + destino
                             + "\"/>\n");
-            w.write("    </packagedElement>\n");
             return;
         }
 
@@ -354,6 +399,12 @@ public class GeneradorXmi21Service {
 
         // Extremo destino
         String rolDestino = str(r.get("rol_destino"));
+        String agregacion =
+                switch (Objects.toString(r.get("tipo_relacion"), "ASOCIACION")) {
+                    case "COMPOSICION" -> " aggregation=\"composite\"";
+                    case "AGREGACION" -> " aggregation=\"shared\"";
+                    default -> "";
+                };
         w.write(
                 "      <ownedEnd xmi:type=\"uml:Property\" xmi:id=\""
                         + id
@@ -364,6 +415,7 @@ public class GeneradorXmi21Service {
                         + " type=\""
                         + destino
                         + "\""
+                        + agregacion
                         + (rolDestino != null && !rolDestino.isBlank()
                                 ? " name=\"" + esc(rolDestino) + "\""
                                 : "")

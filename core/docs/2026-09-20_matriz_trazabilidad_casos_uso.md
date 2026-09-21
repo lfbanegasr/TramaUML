@@ -1,6 +1,6 @@
 # Matriz consolidada de trazabilidad de casos de uso
 
-Fecha de corte: 2026-09-20. Fuente funcional: [lectura de Documentacion](fuentes/2026-09-13_lectura_Documentacion.txt). Línea base del Incremento 12: commit `7996f96`.
+Fecha de corte: 2026-09-20. Fuente funcional: [lectura de Documentacion](fuentes/2026-09-13_lectura_Documentacion.txt). Línea base del Incremento 12: commit `8dc0a28`.
 
 ## Regla de numeración
 
@@ -44,8 +44,8 @@ En documentación nueva se escribirá primero el identificador del catálogo, ut
 | CU23 | CU24 | Reconstruir desde imagen | Completo comprobado | PNG/JPG validados y persistidos, OCR/multimodal configurable, distribución sin solapamiento y corrección posterior |
 | CU24 | CU25 | Revisar cambios interpretados | Completo comprobado | Origen, resumen, confianza, diff, selección, corrección JSON, dependencias, revisión optimista y revalidación servidor |
 | CU25 | CU26 | Aplicar o rechazar cambios | Completo comprobado | Aplicación atómica, rechazo, obsolescencia, rollback, notificación poscommit y prevención de doble decisión |
-| CU26 | CU27 | Importar desde Enterprise Architect | Pendiente | El permiso existe, pero no hay carga, análisis, previsualización ni aplicación XMI |
-| CU27 | CU28 | Exportar para Enterprise Architect | Avanzado parcial | XMI 2.1 y descarga; faltan alcance por paquete/versión, advertencias y prueba con Enterprise Architect |
+| CU26 | CU27 | Importar desde Enterprise Architect | Completo comprobado | Carga binaria, parser seguro, previsualización, FUSIONAR/REEMPLAZAR, revisión optimista, aplicación atómica, cancelación y fallo trazable |
+| CU27 | CU28 | Exportar para Enterprise Architect | Completo comprobado | XMI 2.1, versión histórica, alcance por paquete/subpaquetes, advertencias, descarga y round-trip; sin afirmar prueba GUI con EA comercial |
 | CU28 | CU29 | Configurar generación del backend | Avanzado parcial | Configuración base y capas; faltan selección de clases, operaciones, dependencias, versiones y mapeos |
 | CU29 | CU30 | Generar backend Spring Boot | Avanzado parcial | ZIP con entidades, repositorios, DTOs, controladores, OpenAPI y esquema; falta enlazarlo con validación automática |
 | CU30 | CU31 | Validar backend generado | Pendiente | No existe compilación aislada, comparación con el modelo ni informe persistente |
@@ -56,7 +56,7 @@ En documentación nueva se escribirá primero el identificador del catálogo, ut
 - Acceso, administración, proyectos y modelado: paquetes `bo.edu.uml.acceso`, `bo.edu.uml.proyectos` y `bo.edu.uml.modelado`.
 - Colaboración y conflictos: paquete `bo.edu.uml.colaboracion`.
 - Historial y restauración: paquete `bo.edu.uml.historial` y [contrato del incremento 06](2026-09-15_incremento_06_contratos.md).
-- XMI y generación: paquetes `bo.edu.uml.xmi` y `bo.edu.uml.generacion` y [seguimiento del incremento 08](2026-09-18_seguimiento_incremento_08.md).
+- XMI y generación: paquetes `bo.edu.uml.xmi` y `bo.edu.uml.generacion`, [contrato del incremento 13](2026-09-20_incremento_13_contrato_xmi.md) y [seguimiento del incremento 13](2026-09-20_seguimiento_incremento_13.md).
 - Asistencia inteligente: paquete `bo.edu.uml.ia`, [contrato P04](2026-09-19_p04_contrato_asistencia_inteligente.md) y [cierre del incremento 12](2026-09-20_seguimiento_incremento_12.md).
 - Servicios de plataforma: paquete `bo.edu.uml.servicios` y [contrato del incremento 11](2026-09-20_incremento_11_contrato_servicios_plataforma.md).
 

@@ -2,6 +2,9 @@ package bo.edu.uml.xmi.repositorio;
 
 import bo.edu.uml.compartido.ApiException;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -17,9 +20,11 @@ import java.util.*;
 public class XmiRepositorio {
 
     private final NamedParameterJdbcTemplate jdbc;
+    private final ObjectMapper json;
 
-    public XmiRepositorio(NamedParameterJdbcTemplate jdbc) {
+    public XmiRepositorio(NamedParameterJdbcTemplate jdbc, ObjectMapper json) {
         this.jdbc = jdbc;
+        this.json = json;
     }
 
     // ─── Cabecera del modelo ─────────────────────────────────────────────────
@@ -28,6 +33,7 @@ public class XmiRepositorio {
             UUID id,
             UUID proyecto,
             String nombre,
+            long revision,
             UUID idVersionActual,
             String estado,
             String estadoProyecto) {}
@@ -35,17 +41,17 @@ public class XmiRepositorio {
     public CabeceraModelo cabecera(UUID modelo) {
         return jdbc
                 .query(
-                        "select m.id,m.id_proyecto,m.nombre,m.id_version_actual,m.estado,"
-                                + " p.estado estado_proyecto"
-                                + " from uml_colaborativo.modelo_uml m"
-                                + " join uml_colaborativo.proyecto p on p.id=m.id_proyecto"
-                                + " where m.id=:id",
+                        "select"
+                            + " m.id,m.id_proyecto,m.nombre,m.revision_actual,m.id_version_actual,m.estado,"
+                            + " p.estado estado_proyecto from uml_colaborativo.modelo_uml m join"
+                            + " uml_colaborativo.proyecto p on p.id=m.id_proyecto where m.id=:id",
                         Map.of("id", modelo),
                         (r, n) ->
                                 new CabeceraModelo(
                                         r.getObject("id", UUID.class),
                                         r.getObject("id_proyecto", UUID.class),
                                         r.getString("nombre"),
+                                        r.getLong("revision_actual"),
                                         r.getObject("id_version_actual", UUID.class),
                                         r.getString("estado"),
                                         r.getString("estado_proyecto")))
@@ -132,27 +138,77 @@ public class XmiRepositorio {
                 Map.of("m", modelo));
     }
 
+    /** Lee una instantánea inmutable y verifica que la versión pertenezca al modelo. */
+    public JsonNode leerInstantanea(UUID modelo, UUID version) {
+        String contenido =
+                jdbc
+                        .query(
+                                "select instantanea::text from uml_colaborativo.version_modelo_uml"
+                                        + " where id=:version and id_modelo=:modelo",
+                                Map.of("version", version, "modelo", modelo),
+                                (r, n) -> r.getString(1))
+                        .stream()
+                        .findFirst()
+                        .orElseThrow(() -> new ApiException(404, "Versión no disponible."));
+        try {
+            return json.readTree(contenido);
+        } catch (Exception e) {
+            throw new ApiException(422, "La instantánea seleccionada no puede interpretarse.");
+        }
+    }
+
+    public long revisionVersion(UUID modelo, UUID version) {
+        return jdbc
+                .query(
+                        "select revision from uml_colaborativo.version_modelo_uml"
+                                + " where id=:version and id_modelo=:modelo",
+                        Map.of("version", version, "modelo", modelo),
+                        (r, n) -> r.getLong("revision"))
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new ApiException(404, "Versión no disponible."));
+    }
+
     // ─── Persistencia XMI ────────────────────────────────────────────────────
 
     /** Guarda el archivo XMI en {@code archivo_almacenado} y devuelve su UUID. */
     public UUID guardarArchivo(UUID idProyecto, UUID actor, String nombre, byte[] contenido) {
+        return guardarArchivo(
+                idProyecto, actor, "SALIDA_XMI", "application/xml", nombre, contenido);
+    }
+
+    /** Guarda el archivo XMI original de una importación. */
+    public UUID guardarArchivoEntrada(
+            UUID idProyecto, UUID actor, String nombre, String tipoContenido, byte[] contenido) {
+        return guardarArchivo(idProyecto, actor, "ENTRADA_XMI", tipoContenido, nombre, contenido);
+    }
+
+    private UUID guardarArchivo(
+            UUID idProyecto,
+            UUID actor,
+            String categoria,
+            String tipoContenido,
+            String nombre,
+            byte[] contenido) {
         UUID id = UUID.randomUUID();
         String hash = sha256(contenido);
-        String clave = "xmi/" + id + "/" + nombre;
+        String clave = "xmi/" + categoria.toLowerCase(Locale.ROOT) + "/" + id + "/" + nombre;
         jdbc.update(
                 "insert into uml_colaborativo.archivo_almacenado"
                         + "(id,id_proyecto,cargado_por,categoria,proveedor_almacenamiento,"
                         + " clave_almacenamiento,nombre_original,tipo_contenido,tamano_bytes,"
                         + " sha256,creado_en,contenido)"
-                        + " values(:id,:proyecto,:actor,'SALIDA_XMI','BASE_DATOS',"
-                        + " :clave,:nombre,'application/xml',:tam,"
+                        + " values(:id,:proyecto,:actor,:categoria,'BASE_DATOS',"
+                        + " :clave,:nombre,:tipo,:tam,"
                         + " :sha256,clock_timestamp(),:contenido)",
                 new MapSqlParameterSource()
                         .addValue("id", id)
                         .addValue("proyecto", idProyecto)
                         .addValue("actor", actor)
+                        .addValue("categoria", categoria)
                         .addValue("clave", clave)
                         .addValue("nombre", nombre)
+                        .addValue("tipo", tipoContenido)
                         .addValue("tam", (long) contenido.length)
                         .addValue("sha256", hash)
                         .addValue("contenido", contenido));
@@ -161,7 +217,12 @@ public class XmiRepositorio {
 
     /** Registra el intercambio en {@code intercambio_xmi} y devuelve su UUID. */
     public UUID registrarIntercambio(
-            UUID modelo, UUID version, UUID actor, UUID idArchivoSalida, int totalClases) {
+            UUID modelo,
+            UUID version,
+            UUID actor,
+            UUID idArchivoSalida,
+            String ambito,
+            String informe) {
         UUID id = UUID.randomUUID();
         jdbc.update(
                 "insert into uml_colaborativo.intercambio_xmi"
@@ -176,11 +237,201 @@ public class XmiRepositorio {
                         .addValue("version", version)
                         .addValue("actor", actor)
                         .addValue("archivo", idArchivoSalida)
-                        .addValue("ambito", "{\"alcance\":\"MODELO_COMPLETO\"}")
-                        .addValue(
-                                "informe",
-                                "{\"totalClases\":" + totalClases + ",\"variante\":\"XMI_2.1\"}"));
+                        .addValue("ambito", ambito)
+                        .addValue("informe", informe));
         return id;
+    }
+
+    public record IntercambioImportacion(
+            UUID id,
+            UUID modelo,
+            UUID archivoEntrada,
+            String nombreArchivo,
+            String estado,
+            String estrategia,
+            String variante,
+            String versionEnterpriseArchitect,
+            String ambito,
+            String informe,
+            String detalleError,
+            UUID versionImportada) {}
+
+    /** Registra la carga antes de analizarla para conservar un fallo trazable. */
+    public UUID registrarImportacion(
+            UUID modelo,
+            UUID version,
+            UUID actor,
+            UUID archivoEntrada,
+            UUID idSolicitud,
+            long revisionBase,
+            String estrategia) {
+        UUID id = UUID.randomUUID();
+        String ambito =
+                escribir(
+                        Map.of(
+                                "alcance",
+                                "MODELO_COMPLETO",
+                                "idSolicitud",
+                                idSolicitud,
+                                "revisionBase",
+                                revisionBase));
+        jdbc.update(
+                "insert into uml_colaborativo.intercambio_xmi"
+                    + "(id,id_modelo,id_version_modelo,solicitado_por,direccion,variante_xmi,"
+                    + " estrategia_fusion,ambito,id_archivo_entrada,estado,informe,iniciado_en,creado_en)"
+                    + " values(:id,:modelo,:version,:actor,'IMPORTAR','XMI_2.1',:estrategia,"
+                    + " cast(:ambito as jsonb),:archivo,'ANALIZANDO','{}'::jsonb,"
+                    + " clock_timestamp(),clock_timestamp())",
+                new MapSqlParameterSource()
+                        .addValue("id", id)
+                        .addValue("modelo", modelo)
+                        .addValue("version", version)
+                        .addValue("actor", actor)
+                        .addValue("estrategia", estrategia)
+                        .addValue("ambito", ambito)
+                        .addValue("archivo", archivoEntrada));
+        return id;
+    }
+
+    public Optional<UUID> buscarImportacion(
+            UUID modelo, UUID actor, UUID idSolicitud, String estrategia) {
+        return jdbc
+                .query(
+                        "select id from uml_colaborativo.intercambio_xmi where id_modelo=:modelo"
+                            + " and solicitado_por=:actor and direccion='IMPORTAR' and"
+                            + " estrategia_fusion=:estrategia and ambito->>'idSolicitud'=:solicitud"
+                            + " order by creado_en desc limit 1",
+                        Map.of(
+                                "modelo",
+                                modelo,
+                                "actor",
+                                actor,
+                                "estrategia",
+                                estrategia,
+                                "solicitud",
+                                idSolicitud.toString()),
+                        (r, n) -> r.getObject("id", UUID.class))
+                .stream()
+                .findFirst();
+    }
+
+    public void registrarAnalisis(
+            UUID intercambio, String versionEnterpriseArchitect, String informe) {
+        int actualizadas =
+                jdbc.update(
+                        "update uml_colaborativo.intercambio_xmi set"
+                                + " version_enterprise_architect=:ea,estado='LISTO_PARA_REVISION',"
+                                + " informe=cast(:informe as jsonb),detalle_error=null"
+                                + " where id=:id and direccion='IMPORTAR' and estado='ANALIZANDO'",
+                        new MapSqlParameterSource()
+                                .addValue("id", intercambio)
+                                .addValue("ea", versionEnterpriseArchitect)
+                                .addValue("informe", informe));
+        if (actualizadas != 1)
+            throw new ApiException(409, "La importación ya no admite el resultado del análisis.");
+    }
+
+    public void registrarFallo(UUID intercambio, String detalle) {
+        jdbc.update(
+                "update uml_colaborativo.intercambio_xmi set"
+                    + " estado='FALLIDO',detalle_error=:detalle, completado_en=clock_timestamp()"
+                    + " where id=:id and estado='ANALIZANDO'",
+                Map.of("id", intercambio, "detalle", detalle));
+    }
+
+    public IntercambioImportacion importacion(UUID modelo, UUID intercambio) {
+        return consultarImportacion(modelo, intercambio, false);
+    }
+
+    public IntercambioImportacion bloquearImportacion(UUID modelo, UUID intercambio) {
+        return consultarImportacion(modelo, intercambio, true);
+    }
+
+    private IntercambioImportacion consultarImportacion(
+            UUID modelo, UUID intercambio, boolean bloquear) {
+        String sql =
+                "select ix.id,ix.id_modelo,ix.id_archivo_entrada,a.nombre_original,ix.estado,"
+                    + " ix.estrategia_fusion,ix.variante_xmi,ix.version_enterprise_architect,"
+                    + " ix.ambito::text,ix.informe::text,ix.detalle_error,ix.id_version_importada"
+                    + " from uml_colaborativo.intercambio_xmi ix join"
+                    + " uml_colaborativo.archivo_almacenado a on a.id=ix.id_archivo_entrada where"
+                    + " ix.id=:id and ix.id_modelo=:modelo and ix.direccion='IMPORTAR'"
+                        + (bloquear ? " for update of ix" : "");
+        return jdbc
+                .query(sql, Map.of("id", intercambio, "modelo", modelo), this::importacion)
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new ApiException(404, "Importación XMI no encontrada."));
+    }
+
+    private IntercambioImportacion importacion(java.sql.ResultSet r, int n)
+            throws java.sql.SQLException {
+        return new IntercambioImportacion(
+                r.getObject("id", UUID.class),
+                r.getObject("id_modelo", UUID.class),
+                r.getObject("id_archivo_entrada", UUID.class),
+                r.getString("nombre_original"),
+                r.getString("estado"),
+                r.getString("estrategia_fusion"),
+                r.getString("variante_xmi"),
+                r.getString("version_enterprise_architect"),
+                r.getString("ambito"),
+                r.getString("informe"),
+                r.getString("detalle_error"),
+                r.getObject("id_version_importada", UUID.class));
+    }
+
+    public void completarImportacion(
+            UUID intercambio, UUID versionImportada, UUID idSolicitudAplicacion) {
+        int actualizadas =
+                jdbc.update(
+                        "update uml_colaborativo.intercambio_xmi set estado='COMPLETADO',"
+                            + " id_version_importada=:version,completado_en=clock_timestamp(),"
+                            + " informe=jsonb_set(informe,'{idSolicitudAplicacion}',to_jsonb(:solicitud::text),true)"
+                            + " where id=:id and estado='LISTO_PARA_REVISION'",
+                        Map.of(
+                                "id",
+                                intercambio,
+                                "version",
+                                versionImportada,
+                                "solicitud",
+                                idSolicitudAplicacion.toString()));
+        if (actualizadas != 1) throw new ApiException(409, "La importación ya fue procesada.");
+    }
+
+    public void cancelarImportacion(UUID intercambio, String motivo) {
+        int actualizadas =
+                jdbc.update(
+                        "update uml_colaborativo.intercambio_xmi set estado='CANCELADO',"
+                                + " detalle_error=:motivo,completado_en=clock_timestamp()"
+                                + " where id=:id and estado='LISTO_PARA_REVISION'",
+                        new MapSqlParameterSource()
+                                .addValue("id", intercambio)
+                                .addValue("motivo", motivo));
+        if (actualizadas != 1) throw new ApiException(409, "La importación ya fue procesada.");
+    }
+
+    public Optional<UUID> sesionEditable(UUID modelo, UUID actor) {
+        return jdbc
+                .query(
+                        "select s.id from uml_colaborativo.sesion_edicion_modelo s join"
+                            + " uml_colaborativo.participante_sesion_modelo p on"
+                            + " p.id_sesion_edicion=s.id where s.id_modelo=:modelo and"
+                            + " s.estado='ACTIVO' and p.id_usuario=:actor and"
+                            + " p.modo_participante='EDITOR' and p.salida_en is null and"
+                            + " p.estado_presencia='EN_LINEA' order by p.entrada_en desc limit 1",
+                        Map.of("modelo", modelo, "actor", actor),
+                        (r, n) -> r.getObject("id", UUID.class))
+                .stream()
+                .findFirst();
+    }
+
+    private String escribir(Object valor) {
+        try {
+            return json.writeValueAsString(valor);
+        } catch (Exception e) {
+            throw new IllegalStateException("No se pudieron serializar los metadatos XMI.", e);
+        }
     }
 
     /** Lee el contenido del archivo de salida de un intercambio dado. */

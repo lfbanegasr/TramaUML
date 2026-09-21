@@ -3,14 +3,60 @@ import { api } from '../../../shared/api';
 export type SolicitudXmi = {
   idSolicitud: string;
   descripcion?: string;
+  idVersion?: string;
+  idPaquete?: string;
+  incluirSubpaquetes?: boolean;
 };
 
 export type ResultadoXmi = {
   idIntercambio: string;
   idArchivoSalida: string;
   nombreArchivo: string;
+  idVersion: string;
+  idPaquete: string | null;
+  totalPaquetes: number;
   totalClases: number;
   totalRelaciones: number;
+  advertencias: string[];
+};
+
+export type OperacionImportacionXmi = {
+  orden: number;
+  operacion: 'CREAR' | 'ACTUALIZAR' | 'ELIMINAR';
+  entidad: 'PAQUETE' | 'CLASE' | 'ATRIBUTO' | 'OPERACION' | 'RELACION';
+  idEntidad: string;
+  nombre: string;
+  datos: Record<string, unknown> | null;
+};
+
+export type ImportacionXmi = {
+  idIntercambio: string;
+  idArchivoEntrada: string;
+  nombreArchivo: string;
+  estado: 'ANALIZANDO' | 'LISTO_PARA_REVISION' | 'COMPLETADO' | 'FALLIDO' | 'CANCELADO';
+  estrategia: 'FUSIONAR' | 'REEMPLAZAR';
+  varianteXmi: string;
+  versionEnterpriseArchitect: string | null;
+  revisionBase: number;
+  revisionActual: number;
+  totalPaquetes: number;
+  totalClases: number;
+  totalAtributos: number;
+  totalOperaciones: number;
+  totalRelaciones: number;
+  advertencias: string[];
+  bloqueadores: string[];
+  operaciones: OperacionImportacionXmi[];
+  puedeAplicar: boolean;
+  detalleError: string | null;
+};
+
+export type ResultadoAplicacionXmi = {
+  idIntercambio: string;
+  estado: string;
+  revision: number;
+  idVersion: string;
+  repetido: boolean;
 };
 
 /** CU28 — POST: genera el XMI y persiste el intercambio. */
@@ -18,6 +64,54 @@ export const exportarXmi = (modelo: string, solicitud: SolicitudXmi): Promise<Re
   api<ResultadoXmi>('/modelos/' + modelo + '/xmi/exportar', {
     method: 'POST',
     body: JSON.stringify(solicitud),
+  });
+
+export const importarXmi = (
+  modelo: string,
+  archivo: File,
+  estrategia: 'FUSIONAR' | 'REEMPLAZAR',
+  idSolicitud: string,
+): Promise<ImportacionXmi> => {
+  const form = new FormData();
+  form.append('archivo', archivo);
+  const query = new URLSearchParams({ idSolicitud, estrategia });
+  return api<ImportacionXmi>(`/modelos/${modelo}/xmi/importaciones?${query.toString()}`, {
+    method: 'POST',
+    body: form,
+  });
+};
+
+export const consultarImportacionXmi = (
+  modelo: string,
+  intercambio: string,
+): Promise<ImportacionXmi> =>
+  api<ImportacionXmi>(`/modelos/${modelo}/xmi/importaciones/${intercambio}`);
+
+export const aplicarImportacionXmi = (
+  modelo: string,
+  intercambio: string,
+  sesion: string,
+  revisionBase: number,
+  idSolicitud: string,
+): Promise<ResultadoAplicacionXmi> =>
+  api<ResultadoAplicacionXmi>(`/modelos/${modelo}/xmi/importaciones/${intercambio}/aplicar`, {
+    method: 'POST',
+    body: JSON.stringify({
+      idSolicitud,
+      idSesionEdicion: sesion,
+      revisionBase,
+      confirmar: true,
+    }),
+  });
+
+export const cancelarImportacionXmi = (
+  modelo: string,
+  intercambio: string,
+  motivo?: string,
+): Promise<ImportacionXmi> =>
+  api<ImportacionXmi>(`/modelos/${modelo}/xmi/importaciones/${intercambio}/cancelar`, {
+    method: 'POST',
+    body: JSON.stringify({ motivo: motivo || undefined }),
   });
 
 /**

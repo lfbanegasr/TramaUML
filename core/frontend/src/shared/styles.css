@@ -1971,7 +1971,8 @@ code.small {
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
-.form-group input {
+.form-group input,
+.form-group select {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 8px 12px;
@@ -1980,10 +1981,114 @@ code.small {
   background: white;
   transition: border-color 0.15s;
 }
-.form-group input:focus {
+.form-group input:focus,
+.form-group select:focus {
   outline: none;
   border-color: var(--green);
   box-shadow: 0 0 0 3px rgba(27, 93, 76, 0.12);
+}
+.xmi-export-options {
+  display: grid;
+  gap: 14px;
+}
+.xmi-export-options .check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.xmi-drop-zone {
+  min-height: 130px;
+  border: 2px dashed #abc9bd;
+  border-radius: 12px;
+  background: #f6faf8;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 20px;
+  color: #315b4d;
+  cursor: pointer;
+  text-align: center;
+}
+.xmi-drop-zone.dragging {
+  border-color: var(--green);
+  background: #e9f5ef;
+}
+.xmi-drop-zone input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+.xmi-drop-zone span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.xmi-destructive-warning,
+.xmi-warnings {
+  border: 1px solid #efd18b;
+  background: #fff9e8;
+  color: #775817;
+  border-radius: 9px;
+  padding: 11px 14px;
+  margin: 0;
+  font-size: 12px;
+}
+.xmi-warnings ul,
+.dialog-error ul {
+  margin: 7px 0 0;
+  padding-left: 18px;
+}
+.xmi-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.xmi-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 12px 14px;
+  border-radius: 9px;
+  background: #f2f7f5;
+  color: #315b4d;
+  font-size: 12px;
+}
+.xmi-operation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.xmi-operation {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+.operation-kind {
+  min-width: 74px;
+  border-radius: 999px;
+  padding: 3px 7px;
+  text-align: center;
+  background: #dff2e8;
+  color: #17613f;
+  font-size: 10px;
+  font-weight: 800;
+}
+.operation-kind.actualizar {
+  background: #e4edfb;
+  color: #2d5290;
+}
+.operation-kind.eliminar {
+  background: #fee2e2;
+  color: #991b1b;
 }
 .form-grid {
   display: grid;

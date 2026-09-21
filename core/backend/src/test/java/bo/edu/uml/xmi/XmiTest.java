@@ -2,6 +2,8 @@ package bo.edu.uml.xmi;
 
 import static org.assertj.core.api.Assertions.*;
 
+import bo.edu.uml.compartido.ApiException;
+import bo.edu.uml.xmi.servicio.AnalizadorXmi21Service;
 import bo.edu.uml.xmi.servicio.GeneradorXmi21Service;
 
 import org.junit.jupiter.api.Test;
@@ -13,6 +15,7 @@ import java.util.*;
 class XmiTest {
 
     private final GeneradorXmi21Service generador = new GeneradorXmi21Service();
+    private final AnalizadorXmi21Service analizador = new AnalizadorXmi21Service();
 
     private Map<String, Object> clase(String id, String nombre, String paquete, boolean abstracto) {
         Map<String, Object> m = new LinkedHashMap<>();
@@ -196,5 +199,117 @@ class XmiTest {
         // Bien formado: no hay < sin cerrar (verificación básica)
         assertThat(xml.chars().filter(c -> c == '<').count())
                 .isEqualTo(xml.chars().filter(c -> c == '>').count());
+    }
+
+    @Test
+    void exportacionPuedeAnalizarseSinPerderClasesAtributosYRelacion() {
+        String idA = UUID.randomUUID().toString();
+        String idB = UUID.randomUUID().toString();
+        byte[] xmi =
+                generador.generar(
+                        "Ventas",
+                        List.of(),
+                        List.of(
+                                clase(idA, "Cliente", null, false),
+                                clase(idB, "Pedido", null, false)),
+                        List.of(
+                                atributo(
+                                        UUID.randomUUID().toString(),
+                                        idA,
+                                        "nombre",
+                                        "String",
+                                        false)),
+                        List.of(),
+                        List.of(),
+                        List.of(
+                                relacion(
+                                        UUID.randomUUID().toString(),
+                                        idA,
+                                        idB,
+                                        "ASOCIACION",
+                                        1,
+                                        1,
+                                        0,
+                                        null)));
+
+        var resultado = analizador.analizar(xmi, UUID.randomUUID());
+
+        assertThat(resultado.nombreModelo()).isEqualTo("Ventas");
+        assertThat(resultado.clases())
+                .extracting(AnalizadorXmi21Service.Clase::nombre)
+                .containsExactly("Cliente", "Pedido");
+        assertThat(resultado.atributos())
+                .singleElement()
+                .extracting(a -> a.nombre())
+                .isEqualTo("nombre");
+        assertThat(resultado.relaciones())
+                .singleElement()
+                .satisfies(
+                        r -> {
+                            assertThat(r.tipo()).isEqualTo("ASOCIACION");
+                            assertThat(r.maximoDestino()).isNull();
+                        });
+    }
+
+    @Test
+    void generalizacionYDependenciaUsanEstructurasUmlImportables() {
+        String idA = UUID.randomUUID().toString();
+        String idB = UUID.randomUUID().toString();
+        byte[] xmi =
+                generador.generar(
+                        "Tipos",
+                        List.of(),
+                        List.of(
+                                clase(idA, "Especializada", null, false),
+                                clase(idB, "Base", null, true)),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(
+                                relacion(
+                                        UUID.randomUUID().toString(),
+                                        idA,
+                                        idB,
+                                        "GENERALIZACION",
+                                        null,
+                                        null,
+                                        null,
+                                        null),
+                                relacion(
+                                        UUID.randomUUID().toString(),
+                                        idA,
+                                        idB,
+                                        "DEPENDENCIA",
+                                        null,
+                                        null,
+                                        null,
+                                        null)));
+        String xml = new String(xmi, StandardCharsets.UTF_8);
+
+        assertThat(xml).contains("<generalization").contains("uml:Dependency");
+        assertThat(xml).doesNotContain("_gen_wrapper");
+        assertThat(analizador.analizar(xmi, UUID.randomUUID()).relaciones())
+                .extracting(AnalizadorXmi21Service.Relacion::tipo)
+                .containsExactlyInAnyOrder("GENERALIZACION", "DEPENDENCIA");
+    }
+
+    @Test
+    void rechazaDoctypeYEntidadesExternas() {
+        String xmi =
+                """
+                <?xml version="1.0"?>
+                <!DOCTYPE xmi:XMI [<!ENTITY archivo SYSTEM "file:///etc/passwd">]>
+                <xmi:XMI xmlns:xmi="http://schema.omg.org/spec/XMI/2.1" xmi:version="2.1"
+                         xmlns:uml="http://schema.omg.org/spec/UML/2.1">
+                  <uml:Model xmi:id="m" name="&archivo;"/>
+                </xmi:XMI>
+                """;
+
+        assertThatThrownBy(
+                        () ->
+                                analizador.analizar(
+                                        xmi.getBytes(StandardCharsets.UTF_8), UUID.randomUUID()))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("seguro");
     }
 }
