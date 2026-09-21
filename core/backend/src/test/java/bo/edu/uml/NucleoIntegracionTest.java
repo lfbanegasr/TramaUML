@@ -46,6 +46,7 @@ import javax.imageio.ImageIO;
             "uml.cookie-secure=false",
             "uml.bootstrap.enabled=false",
             "uml.validacion.worker=false",
+            "uml.compilacion.worker=false",
             "uml.servicios.clave-maestra=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
             "uml.servicios.version-clave=pruebas-v1"
         })
@@ -58,6 +59,7 @@ class NucleoIntegracionTest {
     @Autowired InicializarAdministrador inicializar;
     @Autowired AccesoRepositorio acceso;
     @Autowired bo.edu.uml.colaboracion.servicio.ColaboracionServicio colaboracion;
+    @Autowired bo.edu.uml.generacion.servicio.ProcesarValidacionBackend procesadorBackend;
     @MockitoSpyBean bo.edu.uml.colaboracion.controlador.ColaboracionWebSocketHandler canal;
     private String usuario, clave;
     private UUID admin;
@@ -4386,6 +4388,8 @@ class NucleoIntegracionTest {
 
         String idGeneracion = resGen.get("idGeneracion").asText();
 
+        completarValidacionBackend(c, modelo, idGeneracion);
+
         // 4. Descargar ZIP generado
         var resDescarga =
                 mvc.perform(
@@ -4559,9 +4563,9 @@ class NucleoIntegracionTest {
                 "dependencias",
                 List.of(
                         Map.of(
-                                "idGrupo", "org.example",
-                                "idArtefacto", "biblioteca-extra",
-                                "version", "1.2.3",
+                                "idGrupo", "org.apache.commons",
+                                "idArtefacto", "commons-lang3",
+                                "version", "3.16.0",
                                 "ambito", "COMPILACION",
                                 "obligatoria", false)));
         var guardada =
@@ -4605,6 +4609,7 @@ class NucleoIntegracionTest {
                                 .andExpect(jsonPath("$.idVersionModelo").value(version))
                                 .andExpect(jsonPath("$.totalClases").value(1)));
         String idGeneracion = generada.get("idGeneracion").asText();
+        completarValidacionBackend(c, modelo, idGeneracion);
         mvc.perform(
                         autorizado(
                                 get(
@@ -4655,7 +4660,182 @@ class NucleoIntegracionTest {
         assertThat(archivos.get("backend-selectivo/src/main/resources/schema.sql"))
                 .contains("clientes_generados", "NUMERIC(19,2)");
         assertThat(archivos.get("backend-selectivo/pom.xml"))
-                .contains("biblioteca-extra", "<version>1.2.3</version>");
+                .contains("commons-lang3", "<version>3.16.0</version>");
+    }
+
+    private JsonNode completarValidacionBackend(Cliente c, String modelo, String generacion)
+            throws Exception {
+        String ruta = "/api/modelos/" + modelo + "/generacion/" + generacion;
+        mvc.perform(autorizado(get(ruta + "/descargar"), c)).andExpect(status().isConflict());
+        var pendiente =
+                respuesta(
+                        escribir(c, post(ruta + "/validaciones"), Map.of())
+                                .andExpect(status().isAccepted()));
+        var duplicada =
+                respuesta(
+                        escribir(c, post(ruta + "/validaciones"), Map.of())
+                                .andExpect(status().isAccepted()));
+        assertThat(duplicada.get("id").asText()).isEqualTo(pendiente.get("id").asText());
+        mvc.perform(autorizado(get(ruta + "/descargar"), c)).andExpect(status().isConflict());
+        procesadorBackend.procesar(UUID.fromString(pendiente.get("id").asText()));
+        var informe =
+                respuesta(
+                        mvc.perform(autorizado(get(ruta + "/validacion"), c))
+                                .andExpect(status().isOk()));
+        assertThat(informe.get("estado").asText())
+                .as(informe.toPrettyString())
+                .isIn("VALIDO", "VALIDO_CON_ADVERTENCIAS");
+        assertThat(informe.get("registroCompilacion").asText()).contains("BUILD SUCCESS");
+        return informe;
+    }
+
+    @Test
+    void validacionBackendControlaPermisosCsrfIntegridadYErroresDeCompilacion() throws Exception {
+        var c = login(usuario, clave);
+        var p = proyecto(c);
+        String modelo = p.get("idModelo").asText();
+        UUID clase = UUID.randomUUID();
+        enviar(
+                        c,
+                        modelo,
+                        cambio(
+                                1,
+                                UUID.randomUUID(),
+                                clase(clase, "Validable"),
+                                Map.of(
+                                        "operacion",
+                                        "CREAR",
+                                        "entidad",
+                                        "ATRIBUTO",
+                                        "idEntidad",
+                                        UUID.randomUUID(),
+                                        "datos",
+                                        Map.of(
+                                                "idClase",
+                                                clase,
+                                                "nombre",
+                                                "id",
+                                                "tipoUml",
+                                                "UUID",
+                                                "esIdentificador",
+                                                true))))
+                .andExpect(status().isOk());
+        validar(c, modelo);
+        Map<String, Object> configuracion =
+                new LinkedHashMap<>(
+                        Map.of(
+                                "nombre",
+                                "Compilación",
+                                "nombreProyecto",
+                                "validable",
+                                "idGrupo",
+                                "com.test",
+                                "idArtefacto",
+                                "validable",
+                                "paqueteBase",
+                                "com.test.validable",
+                                "versionInicial",
+                                "1.0.0",
+                                "generarRepositorios",
+                                true,
+                                "generarControladores",
+                                false,
+                                "generarDtos",
+                                true,
+                                "exponerRest",
+                                false));
+        escribir(c, put("/api/modelos/" + modelo + "/generacion/configuracion"), configuracion)
+                .andExpect(status().isOk());
+        var generada =
+                respuesta(
+                        escribir(
+                                        c,
+                                        post("/api/modelos/" + modelo + "/generacion/generar"),
+                                        Map.of())
+                                .andExpect(status().isOk()));
+        String gen = generada.get("idGeneracion").asText();
+        String ruta = "/api/modelos/" + modelo + "/generacion/" + gen;
+        mvc.perform(post(ruta + "/validaciones").cookie(c.sesion()))
+                .andExpect(status().isForbidden());
+        String otro = proyecto(c).get("idModelo").asText();
+        escribir(c, post("/api/modelos/" + otro + "/generacion/" + gen + "/validaciones"), Map.of())
+                .andExpect(status().isNotFound());
+        String editorNombre = "comp_" + UUID.randomUUID().toString().substring(0, 8);
+        UUID editorId = fixture(editorNombre);
+        miembroFixture(UUID.fromString(p.get("id").asText()), editorId, "EDITOR_PROYECTO");
+        var editor = login(editorNombre, clave);
+        escribir(editor, post(ruta + "/validaciones"), Map.of()).andExpect(status().isForbidden());
+        completarValidacionBackend(c, modelo, gen);
+        mvc.perform(autorizado(get(ruta + "/descargar"), editor)).andExpect(status().isOk());
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from uml_colaborativo.descarga_artefacto where"
+                                    + " id_generacion=?",
+                                Integer.class,
+                                UUID.fromString(gen)))
+                .isEqualTo(1);
+
+        // Revalidar bloquea una aprobación anterior hasta que termine el nuevo intento.
+        var revalidacion =
+                respuesta(
+                        escribir(c, post(ruta + "/validaciones"), Map.of())
+                                .andExpect(status().isAccepted()));
+        mvc.perform(autorizado(get(ruta + "/descargar"), c)).andExpect(status().isConflict());
+        UUID archivo = UUID.fromString(generada.get("idArchivoSalida").asText());
+        byte[] original =
+                jdbc.queryForObject(
+                        "select contenido from uml_colaborativo.archivo_almacenado where id=?",
+                        byte[].class,
+                        archivo);
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (var in = new ZipInputStream(new ByteArrayInputStream(original));
+                var out = new java.util.zip.ZipOutputStream(bytes)) {
+            ZipEntry entrada;
+            while ((entrada = in.getNextEntry()) != null) {
+                out.putNextEntry(new ZipEntry(entrada.getName()));
+                byte[] contenido = in.readAllBytes();
+                out.write(contenido);
+                if (entrada.getName().endsWith("modelo/Validable.java"))
+                    out.write("\nESTO_NO_ES_JAVA\n".getBytes(StandardCharsets.UTF_8));
+                out.closeEntry();
+            }
+        }
+        byte[] roto = bytes.toByteArray();
+        UUID nuevoArchivo = UUID.randomUUID();
+        jdbc.update(
+                """
+                insert into uml_colaborativo.archivo_almacenado(
+                    id, id_proyecto, cargado_por, categoria,
+                    proveedor_almacenamiento, clave_almacenamiento,
+                    nombre_original, tipo_contenido, tamano_bytes, sha256, contenido)
+                select
+                    ?, id_proyecto, cargado_por, categoria,
+                    proveedor_almacenamiento, 'generacion-backend/' || ?,
+                    nombre_original, tipo_contenido, ?, ?, ?
+                from uml_colaborativo.archivo_almacenado where id=?
+                """,
+                nuevoArchivo,
+                nuevoArchivo.toString(),
+                (long) roto.length,
+                bo.edu.uml.generacion.repositorio.ValidacionBackendRepositorio.sha256(roto),
+                roto,
+                archivo);
+        jdbc.update(
+                "update uml_colaborativo.generacion_backend set id_archivo_salida=? where id=?",
+                nuevoArchivo,
+                UUID.fromString(gen));
+        procesadorBackend.procesar(UUID.fromString(revalidacion.get("id").asText()));
+        mvc.perform(autorizado(get(ruta + "/validacion"), c))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.estado").value("INVALIDO"));
+        mvc.perform(autorizado(get(ruta + "/descargar"), c)).andExpect(status().isConflict());
+        assertThat(
+                        jdbc.queryForObject(
+                                "select count(*) from uml_colaborativo.descarga_artefacto where"
+                                    + " id_generacion=?",
+                                Integer.class,
+                                UUID.fromString(gen)))
+                .isEqualTo(1);
     }
 
     @Test

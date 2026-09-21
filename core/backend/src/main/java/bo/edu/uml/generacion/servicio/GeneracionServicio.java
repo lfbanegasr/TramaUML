@@ -41,12 +41,17 @@ public class GeneracionServicio {
     private final GeneracionRepositorio repo;
     private final MotorGeneracionSpringBoot motor;
     private final ObjectMapper json;
+    private final ValidacionBackendServicio validaciones;
 
     public GeneracionServicio(
-            GeneracionRepositorio repo, MotorGeneracionSpringBoot motor, ObjectMapper json) {
+            GeneracionRepositorio repo,
+            MotorGeneracionSpringBoot motor,
+            ObjectMapper json,
+            ValidacionBackendServicio validaciones) {
         this.repo = repo;
         this.motor = motor;
         this.json = json;
+        this.validaciones = validaciones;
     }
 
     @Transactional(readOnly = true)
@@ -178,11 +183,9 @@ public class GeneracionServicio {
                 totalArchivos);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public ContenidoArchivo descargar(Identidad actor, UUID modelo, UUID generacion) {
-        CabeceraModelo cabecera = repo.cabecera(modelo);
-        autorizar(actor, cabecera, "DESCARGAR_ARTEFACTO", "descargar el artefacto");
-        return repo.descargarPorGeneracion(modelo, generacion);
+        return validaciones.descargar(actor, modelo, generacion);
     }
 
     private ConfiguracionGeneracion vista(
@@ -716,9 +719,8 @@ public class GeneracionServicio {
         List<Dependencia> ds = new ArrayList<>();
         if (controladores || rest)
             ds.add(obligatoria("org.springframework.boot", "spring-boot-starter-web", null));
-        if (repos || servicios)
-            ds.add(obligatoria("org.springframework.boot", "spring-boot-starter-data-jpa", null));
-        if (dtos)
+        ds.add(obligatoria("org.springframework.boot", "spring-boot-starter-data-jpa", null));
+        if (dtos || controladores)
             ds.add(obligatoria("org.springframework.boot", "spring-boot-starter-validation", null));
         ds.add(new Dependencia("org.postgresql", "postgresql", null, "EJECUCION", true));
         if (rest)

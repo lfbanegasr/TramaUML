@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react';
 import {
-  descargarArtefacto,
   generarBackend,
+  listarGeneraciones,
   guardarConfigGeneracion,
   leerConfigGeneracion,
   type ActualizarConfiguracion,
   type ConfiguracionGeneracion,
   type ResultadoGeneracion,
+  type GeneracionDisponible,
 } from '../api/generacionApi';
+import { ValidacionBackendPanel } from './ValidacionBackendPanel';
 
 type Estado = 'cargando' | 'listo' | 'guardando' | 'generando' | 'completado' | 'error';
 
@@ -56,9 +58,19 @@ export function GenerarBackendDialog({
   const [cfg, setCfg] = useState<ConfiguracionGeneracion | null>(null);
   const [resultado, setResultado] = useState<ResultadoGeneracion | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [generaciones, setGeneraciones] = useState<GeneracionDisponible[]>([]);
+  const [seleccionada, setSeleccionada] = useState<string>('');
 
   useEffect(() => {
     let activo = true;
+    listarGeneraciones(modelo)
+      .then((items) => {
+        if (activo) setGeneraciones(items);
+      })
+      .catch((e: unknown) => {
+        if (activo)
+          setError(e instanceof Error ? e.message : 'No se pudo leer el historial de generación.');
+      });
     leerConfigGeneracion(modelo)
       .then((configuracion) => {
         if (activo) {
@@ -122,7 +134,8 @@ export function GenerarBackendDialog({
     try {
       const res = await generarBackend(modelo, guardada.id);
       setResultado(res);
-      await descargarArtefacto(modelo, res.idGeneracion, res.nombreArchivo);
+      setGeneraciones(await listarGeneraciones(modelo));
+      setSeleccionada(res.idGeneracion);
       setEstado('completado');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error al generar el backend.');
@@ -148,6 +161,28 @@ export function GenerarBackendDialog({
         </div>
 
         <div className="dialog-body">
+          {generaciones.length > 0 && (
+            <div className="form-group">
+              <label htmlFor="gen-artefacto">Generaciones guardadas</label>
+              <select
+                id="gen-artefacto"
+                value={seleccionada}
+                onChange={(e) => setSeleccionada(e.target.value)}
+              >
+                <option value="">Selecciona un backend para validar o descargar</option>
+                {generaciones.map((g) => (
+                  <option key={g.idGeneracion} value={g.idGeneracion}>
+                    {g.nombreArchivo} · {new Date(g.creadoEn).toLocaleString()}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          {generaciones
+            .filter((g) => g.idGeneracion === seleccionada)
+            .map((g) => (
+              <ValidacionBackendPanel key={g.idGeneracion} modelo={modelo} generacion={g} />
+            ))}
           <p className="dialog-desc">
             Configura una generación reproducible de <em>{nombreModelo}</em> sobre una versión UML
             congelada. La validación semántica de esa versión es obligatoria antes de generar.
@@ -556,7 +591,7 @@ export function GenerarBackendDialog({
                 onClick={() => void generar()}
                 disabled={ocupado}
               >
-                Guardar, generar y descargar
+                Guardar y generar
               </button>
             </>
           )}

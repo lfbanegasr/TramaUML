@@ -75,7 +75,8 @@ test('importa un XMI mediante previsualización y confirmación explícita', asy
   await expect(page.getByTestId('clase-uml').filter({ hasText: 'Existente' })).toBeVisible();
 });
 
-test('configura, genera y descarga un backend desde el editor', async ({ page }) => {
+test('configura, genera, valida y descarga un backend desde el editor', async ({ page }) => {
+  test.setTimeout(120_000);
   await modeloConClase(page, 'Generable');
   await page.getByTestId('clase-uml').filter({ hasText: 'Generable' }).click();
   await page.getByRole('button', { name: /Añadir atributo/ }).click();
@@ -97,10 +98,15 @@ test('configura, genera y descarga un backend desde el editor', async ({ page })
   await page.getByLabel('Group ID').fill('bo.edu.prueba');
   await page.getByLabel('Artifact ID').fill('backend-prueba');
   await page.getByLabel('Paquete base Java').fill('bo.edu.prueba.backend');
+  await page.getByRole('button', { name: 'Guardar y generar', exact: true }).click();
+  const panel = page.getByRole('region', { name: 'Validación del backend' });
+  await expect(panel.getByRole('button', { name: 'Descargar ZIP validado' })).toBeDisabled();
+  await panel.getByRole('button', { name: 'Validar backend', exact: true }).click();
+  await expect(panel.getByRole('status')).toContainText('Validación: VALIDO', { timeout: 100_000 });
   const descarga = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Guardar, generar y descargar', exact: true }).click();
+  await panel.getByRole('button', { name: 'Descargar ZIP validado' }).click();
   expect((await descarga).suggestedFilename()).toMatch(/\.zip$/);
-  const resultado = page.getByRole('dialog').getByRole('status');
+  const resultado = page.getByRole('dialog').locator('.dialog-success');
   await expect(resultado).toContainText('Proyecto generado desde una versión UML congelada');
   await expect(resultado).toContainText('1 clases');
 });

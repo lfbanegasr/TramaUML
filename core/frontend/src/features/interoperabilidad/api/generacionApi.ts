@@ -121,6 +121,47 @@ export type ResultadoGeneracion = {
   totalArchivosGenerados: number;
 };
 
+export type InformeBackend = {
+  id: string;
+  idGeneracion: string;
+  estado:
+    'EN_EJECUCION' | 'VALIDO' | 'VALIDO_CON_ADVERTENCIAS' | 'INVALIDO' | 'FALLIDO' | 'INCOMPLETO';
+  comprobacionesAprobadas: number;
+  cantidadAdvertencias: number;
+  cantidadErrores: number;
+  iniciadoEn: string;
+  completadoEn: string | null;
+  sha256: string | null;
+  registroCompilacion: string;
+  hallazgos: Array<{
+    severidad: string;
+    tipoComprobacion: string;
+    componente: string | null;
+    mensaje: string;
+  }>;
+  puedeDescargar: boolean;
+};
+
+export type GeneracionDisponible = {
+  idGeneracion: string;
+  idConfiguracion: string;
+  idVersionModelo: string;
+  numeroVersion: number;
+  nombreArchivo: string;
+  creadoEn: string;
+  validacion: InformeBackend | null;
+  puedeValidar: boolean;
+};
+
+export const listarGeneraciones = (modelo: string): Promise<GeneracionDisponible[]> =>
+  api('/modelos/' + modelo + '/generacion');
+
+export const validarBackend = (modelo: string, generacion: string): Promise<InformeBackend> =>
+  api('/modelos/' + modelo + '/generacion/' + generacion + '/validaciones', { method: 'POST' });
+
+export const leerInformeBackend = (modelo: string, generacion: string): Promise<InformeBackend> =>
+  api('/modelos/' + modelo + '/generacion/' + generacion + '/validacion');
+
 export const leerConfigGeneracion = (
   modelo: string,
   version?: string,
@@ -158,7 +199,10 @@ export const descargarArtefacto = async (
   const r = await fetch('/api/modelos/' + modelo + '/generacion/' + idGeneracion + '/descargar', {
     credentials: 'same-origin',
   });
-  if (!r.ok) throw new Error('No se pudo descargar el proyecto generado.');
+  if (!r.ok) {
+    const error = (await r.json().catch(() => ({}))) as { mensaje?: string };
+    throw new Error(error.mensaje ?? 'No se pudo descargar el proyecto generado.');
+  }
   const blob = await r.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

@@ -22,6 +22,12 @@ server:
     include-message: never
     include-stacktrace: never
 uml:
+  compilacion:
+    maven-home: ${UML_COMPILACION_MAVEN_HOME:}
+    repositorio: ${UML_COMPILACION_REPOSITORIO:}
+    directorio: ${UML_COMPILACION_DIRECTORIO:}
+    segundos: ${UML_COMPILACION_SEGUNDOS:90}
+    worker: ${UML_COMPILACION_WORKER:true}
   cookie-secure: ${UML_COOKIE_SECURE:true}
   servicios:
     clave-maestra: ${UML_SERVICIOS_MASTER_KEY:}

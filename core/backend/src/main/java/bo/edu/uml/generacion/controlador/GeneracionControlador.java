@@ -2,8 +2,10 @@ package bo.edu.uml.generacion.controlador;
 
 import bo.edu.uml.acceso.modelo.Identidad;
 import bo.edu.uml.generacion.dto.GeneracionDto.*;
+import bo.edu.uml.generacion.dto.ValidacionBackendDto.*;
 import bo.edu.uml.generacion.repositorio.GeneracionRepositorio.ContenidoArchivo;
 import bo.edu.uml.generacion.servicio.GeneracionServicio;
+import bo.edu.uml.generacion.servicio.ValidacionBackendServicio;
 
 import jakarta.validation.Valid;
 
@@ -13,6 +15,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -30,9 +33,35 @@ import java.util.UUID;
 public class GeneracionControlador {
 
     private final GeneracionServicio servicio;
+    private final ValidacionBackendServicio validaciones;
 
-    public GeneracionControlador(GeneracionServicio servicio) {
+    public GeneracionControlador(
+            GeneracionServicio servicio, ValidacionBackendServicio validaciones) {
         this.servicio = servicio;
+        this.validaciones = validaciones;
+    }
+
+    @GetMapping
+    public List<GeneracionDisponible> listar(
+            @AuthenticationPrincipal Identidad actor, @PathVariable UUID modelo) {
+        return validaciones.listar(actor, modelo);
+    }
+
+    @PostMapping("/{id}/validaciones")
+    @ResponseStatus(org.springframework.http.HttpStatus.ACCEPTED)
+    public Informe validar(
+            @AuthenticationPrincipal Identidad actor,
+            @PathVariable UUID modelo,
+            @PathVariable UUID id) {
+        return validaciones.solicitar(actor, modelo, id);
+    }
+
+    @GetMapping("/{id}/validacion")
+    public Informe informe(
+            @AuthenticationPrincipal Identidad actor,
+            @PathVariable UUID modelo,
+            @PathVariable UUID id) {
+        return validaciones.informe(actor, modelo, id);
     }
 
     /** CU29 — Consulta la configuración de generación vigente (o devuelve defaults). */
@@ -70,6 +99,7 @@ public class GeneracionControlador {
             @PathVariable UUID id) {
         ContenidoArchivo archivo = servicio.descargar(actor, modelo, id);
         return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, "no-store")
                 .contentType(MediaType.parseMediaType("application/zip"))
                 .header(
                         HttpHeaders.CONTENT_DISPOSITION,

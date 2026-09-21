@@ -161,7 +161,7 @@ public class MotorGeneracionSpringBoot {
             // Application.java
             agregar(
                     zip,
-                    dirBase + "Application.java",
+                    dirBase + nomClase(artifactId) + "Application.java",
                     generarApplication(paqueteBase, nomClase(artifactId)));
 
             int archivos = 3;
@@ -222,7 +222,7 @@ public class MotorGeneracionSpringBoot {
                     agregar(
                             zip,
                             dirBase + "repositorio/" + cls + "Repositorio.java",
-                            generarRepositorio(paqueteBase, cls));
+                            generarRepositorio(paqueteBase, cls, tipoId(atr)));
                     archivos++;
                 }
 
@@ -241,6 +241,7 @@ public class MotorGeneracionSpringBoot {
                             generarServicio(
                                     paqueteBase,
                                     cls,
+                                    tipoId(atr),
                                     operacionesPorClase.getOrDefault(id, List.of()),
                                     parametrosPorOperacion));
                     archivos++;
@@ -251,7 +252,8 @@ public class MotorGeneracionSpringBoot {
                     agregar(
                             zip,
                             dirBase + "controlador/" + cls + "Controlador.java",
-                            generarControlador(paqueteBase, cls, nombre, opciones.exponerRest()));
+                            generarControlador(
+                                    paqueteBase, cls, nombre, tipoId(atr), opciones.exponerRest()));
                     archivos++;
                 }
             }
@@ -448,8 +450,16 @@ public class MotorGeneracionSpringBoot {
         for (var c : persistentes) {
             String tabla = str(c.getOrDefault("nombre_tabla", snakeCase(str(c.get("nombre")))));
             sb.append("CREATE TABLE IF NOT EXISTS ").append(tabla).append(" (\n");
-            sb.append("    id BIGSERIAL PRIMARY KEY");
             List<Map<String, Object>> atr = atribPorClase.getOrDefault(str(c.get("id")), List.of());
+            var identificador = identificador(atr);
+            sb.append("    ")
+                    .append(snakeCase(str(identificador.get("nombre"))))
+                    .append(" ")
+                    .append(
+                            "Long".equals(tipoId(atr))
+                                    ? "BIGSERIAL"
+                                    : tipoSqlAtributo(identificador))
+                    .append(" PRIMARY KEY");
             for (var a : atr) {
                 if (bool(a.get("es_identificador"))) continue; // id ya generado
                 sb.append(",\n    ")
@@ -500,9 +510,14 @@ public class MotorGeneracionSpringBoot {
         sb.append("@Entity\n");
         sb.append("@Table(name = \"").append(snakeCase(nombreTabla)).append("\")\n");
         sb.append("public class ").append(cls).append(" implements Serializable {\n\n");
+        String tipoId = tipoId(atributos);
+        String campoId = campoJava(str(identificador(atributos).get("nombre")));
         sb.append("    @Id\n");
-        sb.append("    @GeneratedValue(strategy = GenerationType.IDENTITY)\n");
-        sb.append("    private Long id;\n");
+        if ("Long".equals(tipoId) || "Integer".equals(tipoId))
+            sb.append("    @GeneratedValue(strategy = GenerationType.IDENTITY)\n");
+        if ("java.util.UUID".equals(tipoId))
+            sb.append("    @GeneratedValue(strategy = GenerationType.UUID)\n");
+        sb.append("    private ").append(tipoId).append(" ").append(campoId).append(";\n");
 
         for (var a : atributos) {
             if (bool(a.get("es_identificador"))) continue;
@@ -548,8 +563,16 @@ public class MotorGeneracionSpringBoot {
         }
 
         // Getters y setters
-        sb.append("\n    public Long getId() { return id; }\n");
-        sb.append("    public void setId(Long id) { this.id = id; }\n");
+        sb.append("\n    public ")
+                .append(tipoId)
+                .append(" getId() { return ")
+                .append(campoId)
+                .append("; }\n");
+        sb.append("    public void setId(")
+                .append(tipoId)
+                .append(" id) { this.")
+                .append(campoId)
+                .append(" = id; }\n");
 
         for (var a : atributos) {
             if (bool(a.get("es_identificador"))) continue;
@@ -584,7 +607,7 @@ public class MotorGeneracionSpringBoot {
     // Capa Repositorio
     // ═══════════════════════════════════════════════════════════════════
 
-    private String generarRepositorio(String paqueteBase, String cls) {
+    private String generarRepositorio(String paqueteBase, String cls, String tipoId) {
         return "package "
                 + paqueteBase
                 + ".repositorio;\n\n"
@@ -600,7 +623,9 @@ public class MotorGeneracionSpringBoot {
                 + cls
                 + "Repositorio extends JpaRepository<"
                 + cls
-                + ", Long> {\n}\n";
+                + ", "
+                + tipoId
+                + "> {\n}\n";
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -619,7 +644,7 @@ public class MotorGeneracionSpringBoot {
         // Record de respuesta
         sb.append("    /** Representa un ").append(cls).append(" en la respuesta de la API. */\n");
         sb.append("    public record Respuesta(\n");
-        sb.append("            Long id");
+        sb.append("            ").append(tipoId(atributos)).append(" id");
         for (var a : atributos) {
             if (bool(a.get("es_identificador"))) continue;
             sb.append(",\n            ")
@@ -644,7 +669,7 @@ public class MotorGeneracionSpringBoot {
                     .append(campoJava(str(a.get("nombre"))));
             primero = false;
         }
-        if (primero) sb.append("            // Sin atributos adicionales");
+        if (primero) sb.append("            /* Sin atributos adicionales */");
         sb.append(") {}\n");
         sb.append("}\n");
         return sb.toString();
@@ -657,6 +682,7 @@ public class MotorGeneracionSpringBoot {
     private String generarServicio(
             String paqueteBase,
             String cls,
+            String tipoId,
             List<Map<String, Object>> operaciones,
             Map<String, List<Map<String, Object>>> parametrosPorOperacion) {
         String repositorio = campoJava(cls) + "Repositorio";
@@ -699,7 +725,9 @@ public class MotorGeneracionSpringBoot {
                 .append(".findAll(); }\n");
         sb.append("    public Optional<")
                 .append(cls)
-                .append("> obtener(Long id) { return ")
+                .append("> obtener(")
+                .append(tipoId)
+                .append(" id) { return ")
                 .append(repositorio)
                 .append(".findById(id); }\n");
         sb.append("    public ")
@@ -709,7 +737,9 @@ public class MotorGeneracionSpringBoot {
                 .append(" entidad) { return ")
                 .append(repositorio)
                 .append(".save(entidad); }\n");
-        sb.append("    public void eliminar(Long id) { ")
+        sb.append("    public void eliminar(")
+                .append(tipoId)
+                .append(" id) { ")
                 .append(repositorio)
                 .append(".deleteById(id); }\n");
         for (Map<String, Object> operacion : operaciones) {
@@ -746,7 +776,7 @@ public class MotorGeneracionSpringBoot {
     // ═══════════════════════════════════════════════════════════════════
 
     private String generarControlador(
-            String paqueteBase, String cls, String nombre, boolean documentarRest) {
+            String paqueteBase, String cls, String nombre, String tipoId, boolean documentarRest) {
         String ruta = "/" + snakeCase(nombre).replace('_', '-') + "s";
         String campoInst = campoJava(cls);
         String campoRepo = campoInst + "Repositorio";
@@ -817,7 +847,9 @@ public class MotorGeneracionSpringBoot {
                         : "")
                 + "    public ResponseEntity<"
                 + cls
-                + "> obtener(@PathVariable Long id) {\n"
+                + "> obtener(@PathVariable "
+                + tipoId
+                + " id) {\n"
                 + "        return "
                 + campoRepo
                 + ".findById(id)\n"
@@ -844,7 +876,9 @@ public class MotorGeneracionSpringBoot {
                 + "    public ResponseEntity<"
                 + cls
                 + "> actualizar(\n"
-                + "            @PathVariable Long id,\n"
+                + "            @PathVariable "
+                + tipoId
+                + " id,\n"
                 + "            @Valid @RequestBody "
                 + cls
                 + " entidad) {\n"
@@ -863,7 +897,9 @@ public class MotorGeneracionSpringBoot {
                 + (documentarRest
                         ? "    @Operation(summary = \"Eliminar un " + nombre + "\")\n"
                         : "")
-                + "    public ResponseEntity<Void> eliminar(@PathVariable Long id) {\n"
+                + "    public ResponseEntity<Void> eliminar(@PathVariable "
+                + tipoId
+                + " id) {\n"
                 + "        if (!"
                 + campoRepo
                 + ".existsById(id))\n"
@@ -1037,6 +1073,18 @@ public class MotorGeneracionSpringBoot {
 
     private String str(Object o) {
         return o == null ? null : o.toString();
+    }
+
+    private Map<String, Object> identificador(List<Map<String, Object>> atributos) {
+        return atributos.stream()
+                .filter(a -> bool(a.get("es_identificador")))
+                .findFirst()
+                .orElse(Map.of("nombre", "id", "tipo_uml", "Long"));
+    }
+
+    private String tipoId(List<Map<String, Object>> atributos) {
+        String tipo = tipoJavaAtributo(identificador(atributos));
+        return "UUID".equals(tipo) ? "java.util.UUID" : tipo;
     }
 
     private boolean bool(Object o) {
