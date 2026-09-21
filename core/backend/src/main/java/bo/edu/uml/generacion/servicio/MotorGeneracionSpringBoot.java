@@ -1,11 +1,16 @@
 package bo.edu.uml.generacion.servicio;
 
+import bo.edu.uml.generacion.dto.GeneracionDto.Dependencia;
+import bo.edu.uml.generacion.dto.GeneracionDto.MapeoTipo;
+
 import org.springframework.stereotype.Service;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
 /**
@@ -25,6 +30,21 @@ import java.util.zip.ZipOutputStream;
  */
 @Service
 public class MotorGeneracionSpringBoot {
+
+    /** Opciones congeladas de una configuración avanzada. */
+    public record OpcionesGeneracion(
+            String versionJava,
+            String versionSpringBoot,
+            String herramientaMigracion,
+            boolean generarRepositorios,
+            boolean generarServicios,
+            boolean generarControladores,
+            boolean generarDtos,
+            boolean exponerRest,
+            List<Dependencia> dependencias,
+            List<MapeoTipo> mapeosTipo) {}
+
+    public record ResultadoMotor(byte[] contenido, int totalArchivos) {}
 
     /**
      * Genera el ZIP del proyecto Spring Boot.
@@ -49,6 +69,47 @@ public class MotorGeneracionSpringBoot {
             List<Map<String, Object>> atributos,
             List<Map<String, Object>> relaciones) {
 
+        OpcionesGeneracion opciones =
+                new OpcionesGeneracion(
+                        "21",
+                        "3.5.16",
+                        "NINGUNO",
+                        true,
+                        false,
+                        true,
+                        true,
+                        true,
+                        dependenciasPredeterminadas(),
+                        List.of());
+        return generar(
+                        groupId,
+                        artifactId,
+                        version,
+                        paqueteBase,
+                        opciones,
+                        clases,
+                        atributos,
+                        relaciones,
+                        List.of(),
+                        List.of())
+                .contenido();
+    }
+
+    /** Genera respetando capas, dependencias y mapeos guardados en la configuración. */
+    public ResultadoMotor generar(
+            String groupId,
+            String artifactId,
+            String version,
+            String paqueteBase,
+            OpcionesGeneracion opciones,
+            List<Map<String, Object>> clases,
+            List<Map<String, Object>> atributos,
+            List<Map<String, Object>> relaciones,
+            List<Map<String, Object>> operaciones,
+            List<Map<String, Object>> parametros) {
+
+        aplicarMapeos(atributos, opciones.mapeosTipo());
+
         // Solo generamos código para clases persistentes
         List<Map<String, Object>> persistentes =
                 clases.stream().filter(c -> bool(c.get("es_persistente"))).toList();
@@ -69,6 +130,19 @@ public class MotorGeneracionSpringBoot {
                     .add(r);
         }
 
+        Map<String, List<Map<String, Object>>> operacionesPorClase = new LinkedHashMap<>();
+        for (var o : operaciones) {
+            operacionesPorClase
+                    .computeIfAbsent(str(o.get("id_clase")), k -> new ArrayList<>())
+                    .add(o);
+        }
+        Map<String, List<Map<String, Object>>> parametrosPorOperacion = new LinkedHashMap<>();
+        for (var p : parametros) {
+            parametrosPorOperacion
+                    .computeIfAbsent(str(p.get("id_operacion")), k -> new ArrayList<>())
+                    .add(p);
+        }
+
         String paqueteRuta = paqueteBase.replace('.', '/');
         String dirBase = artifactId + "/src/main/java/" + paqueteRuta + "/";
 
@@ -76,7 +150,10 @@ public class MotorGeneracionSpringBoot {
         try (ZipOutputStream zip = new ZipOutputStream(bos, StandardCharsets.UTF_8)) {
 
             // pom.xml
-            agregar(zip, artifactId + "/pom.xml", generarPom(groupId, artifactId, version));
+            agregar(
+                    zip,
+                    artifactId + "/pom.xml",
+                    generarPom(groupId, artifactId, version, opciones));
 
             // .gitignore
             agregar(zip, artifactId + "/.gitignore", gitIgnore());
@@ -87,26 +164,40 @@ public class MotorGeneracionSpringBoot {
                     dirBase + "Application.java",
                     generarApplication(paqueteBase, nomClase(artifactId)));
 
-            // OpenApiConfig.java
-            agregar(
-                    zip,
-                    dirBase + "config/OpenApiConfig.java",
-                    generarOpenApiConfig(paqueteBase, artifactId, version));
+            int archivos = 3;
+            if (opciones.exponerRest()) {
+                agregar(
+                        zip,
+                        dirBase + "config/OpenApiConfig.java",
+                        generarOpenApiConfig(paqueteBase, artifactId, version));
+                archivos++;
+            }
 
             // application.properties
             agregar(
                     zip,
                     artifactId + "/src/main/resources/application.properties",
-                    generarApplicationProperties(artifactId));
+                    generarApplicationProperties(artifactId, opciones.herramientaMigracion()));
+            archivos++;
 
             // schema.sql
+            String esquema = generarSchemaSql(persistentes, atribPorClase);
+            String rutaMigracion =
+                    switch (opciones.herramientaMigracion()) {
+                        case "FLYWAY" -> "/src/main/resources/db/migration/V1__schema.sql";
+                        case "LIQUIBASE" ->
+                                "/src/main/resources/db/changelog/db.changelog-master.xml";
+                        default -> "/src/main/resources/schema.sql";
+                    };
             agregar(
                     zip,
-                    artifactId + "/src/main/resources/schema.sql",
-                    generarSchemaSql(persistentes, atribPorClase));
+                    artifactId + rutaMigracion,
+                    "LIQUIBASE".equals(opciones.herramientaMigracion())
+                            ? generarLiquibase(esquema)
+                            : esquema);
+            archivos++;
 
             // Capas por clase persistente
-            int archivos = 6; // pom + gitignore + Application + OpenApiConfig + properties + schema
             for (var c : persistentes) {
                 String id = str(c.get("id"));
                 String nombre = str(c.get("nombre"));
@@ -118,29 +209,51 @@ public class MotorGeneracionSpringBoot {
                 agregar(
                         zip,
                         dirBase + "modelo/" + cls + ".java",
-                        generarEntidad(paqueteBase, cls, nombre, atr, rels, idANombre));
+                        generarEntidad(
+                                paqueteBase,
+                                cls,
+                                str(c.getOrDefault("nombre_tabla", nombre)),
+                                atr,
+                                rels,
+                                idANombre));
                 archivos++;
 
-                // Repositorio
-                agregar(
-                        zip,
-                        dirBase + "repositorio/" + cls + "Repositorio.java",
-                        generarRepositorio(paqueteBase, cls));
-                archivos++;
+                if (opciones.generarRepositorios()) {
+                    agregar(
+                            zip,
+                            dirBase + "repositorio/" + cls + "Repositorio.java",
+                            generarRepositorio(paqueteBase, cls));
+                    archivos++;
+                }
 
-                // DTO
-                agregar(
-                        zip,
-                        dirBase + "dto/" + cls + "Dto.java",
-                        generarDto(paqueteBase, cls, atr));
-                archivos++;
+                if (opciones.generarDtos()) {
+                    agregar(
+                            zip,
+                            dirBase + "dto/" + cls + "Dto.java",
+                            generarDto(paqueteBase, cls, atr));
+                    archivos++;
+                }
 
-                // Controlador
-                agregar(
-                        zip,
-                        dirBase + "controlador/" + cls + "Controlador.java",
-                        generarControlador(paqueteBase, cls, nombre));
-                archivos++;
+                if (opciones.generarServicios()) {
+                    agregar(
+                            zip,
+                            dirBase + "servicio/" + cls + "Servicio.java",
+                            generarServicio(
+                                    paqueteBase,
+                                    cls,
+                                    operacionesPorClase.getOrDefault(id, List.of()),
+                                    parametrosPorOperacion));
+                    archivos++;
+                }
+
+                if (opciones.generarControladores()
+                        && (!c.containsKey("exponer_rest") || bool(c.get("exponer_rest")))) {
+                    agregar(
+                            zip,
+                            dirBase + "controlador/" + cls + "Controlador.java",
+                            generarControlador(paqueteBase, cls, nombre, opciones.exponerRest()));
+                    archivos++;
+                }
             }
 
             zip.finish();
@@ -149,14 +262,42 @@ public class MotorGeneracionSpringBoot {
                     "Error generando proyecto Spring Boot: " + e.getMessage(), e);
         }
 
-        return bos.toByteArray();
+        return new ResultadoMotor(bos.toByteArray(), contarArchivos(bos.toByteArray()));
     }
 
     // ═══════════════════════════════════════════════════════════════════
     // pom.xml
     // ═══════════════════════════════════════════════════════════════════
 
-    private String generarPom(String groupId, String artifactId, String version) {
+    private String generarPom(
+            String groupId, String artifactId, String version, OpcionesGeneracion opciones) {
+        StringBuilder dependencias = new StringBuilder();
+        for (Dependencia dependencia : opciones.dependencias()) {
+            dependencias.append("    <dependency>\n");
+            dependencias
+                    .append("      <groupId>")
+                    .append(xml(dependencia.idGrupo()))
+                    .append("</groupId>\n");
+            dependencias
+                    .append("      <artifactId>")
+                    .append(xml(dependencia.idArtefacto()))
+                    .append("</artifactId>\n");
+            if (dependencia.version() != null && !dependencia.version().isBlank())
+                dependencias
+                        .append("      <version>")
+                        .append(xml(dependencia.version()))
+                        .append("</version>\n");
+            String ambito =
+                    switch (String.valueOf(dependencia.ambito())) {
+                        case "EJECUCION" -> "runtime";
+                        case "PRUEBA" -> "test";
+                        case "PROVISTO" -> "provided";
+                        default -> null;
+                    };
+            if (ambito != null)
+                dependencias.append("      <scope>").append(ambito).append("</scope>\n");
+            dependencias.append("    </dependency>\n");
+        }
         return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
                 + "<project xmlns=\"http://maven.apache.org/POM/4.0.0\"\n"
                 + "         xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n"
@@ -166,7 +307,9 @@ public class MotorGeneracionSpringBoot {
                 + "  <parent>\n"
                 + "    <groupId>org.springframework.boot</groupId>\n"
                 + "    <artifactId>spring-boot-starter-parent</artifactId>\n"
-                + "    <version>3.5.16</version>\n"
+                + "    <version>"
+                + xml(opciones.versionSpringBoot())
+                + "</version>\n"
                 + "    <relativePath/>\n"
                 + "  </parent>\n"
                 + "  <groupId>"
@@ -183,36 +326,12 @@ public class MotorGeneracionSpringBoot {
                 + "</name>\n"
                 + "  <description>Proyecto generado por Plataforma UML Colaborativa</description>\n"
                 + "  <properties>\n"
-                + "    <java.version>21</java.version>\n"
+                + "    <java.version>"
+                + xml(opciones.versionJava())
+                + "</java.version>\n"
                 + "  </properties>\n"
                 + "  <dependencies>\n"
-                + "    <dependency>\n"
-                + "      <groupId>org.springframework.boot</groupId>\n"
-                + "      <artifactId>spring-boot-starter-web</artifactId>\n"
-                + "    </dependency>\n"
-                + "    <dependency>\n"
-                + "      <groupId>org.springframework.boot</groupId>\n"
-                + "      <artifactId>spring-boot-starter-data-jpa</artifactId>\n"
-                + "    </dependency>\n"
-                + "    <dependency>\n"
-                + "      <groupId>org.springframework.boot</groupId>\n"
-                + "      <artifactId>spring-boot-starter-validation</artifactId>\n"
-                + "    </dependency>\n"
-                + "    <dependency>\n"
-                + "      <groupId>org.postgresql</groupId>\n"
-                + "      <artifactId>postgresql</artifactId>\n"
-                + "      <scope>runtime</scope>\n"
-                + "    </dependency>\n"
-                + "    <dependency>\n"
-                + "      <groupId>org.springdoc</groupId>\n"
-                + "      <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>\n"
-                + "      <version>2.8.9</version>\n"
-                + "    </dependency>\n"
-                + "    <dependency>\n"
-                + "      <groupId>org.springframework.boot</groupId>\n"
-                + "      <artifactId>spring-boot-starter-test</artifactId>\n"
-                + "      <scope>test</scope>\n"
-                + "    </dependency>\n"
+                + dependencias
                 + "  </dependencies>\n"
                 + "  <build>\n"
                 + "    <plugins>\n"
@@ -281,7 +400,17 @@ public class MotorGeneracionSpringBoot {
     // application.properties
     // ═══════════════════════════════════════════════════════════════════
 
-    private String generarApplicationProperties(String artifactId) {
+    private String generarApplicationProperties(String artifactId, String herramientaMigracion) {
+        String inicializacion =
+                switch (herramientaMigracion) {
+                    case "FLYWAY" -> "spring.flyway.enabled=true\n";
+                    case "LIQUIBASE" ->
+                            "spring.liquibase.enabled=true\n"
+                                + "spring.liquibase.change-log=classpath:db/changelog/db.changelog-master.xml\n";
+                    default ->
+                            "spring.sql.init.mode=always\n"
+                                    + "spring.sql.init.schema-locations=classpath:schema.sql\n";
+                };
         return "# Configuración generada por Plataforma UML Colaborativa\n"
                 + "spring.application.name="
                 + artifactId
@@ -298,8 +427,8 @@ public class MotorGeneracionSpringBoot {
                 + "spring.jpa.show-sql=false\n"
                 + "spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect\n\n"
                 + "# Inicialización del esquema\n"
-                + "spring.sql.init.mode=always\n"
-                + "spring.sql.init.schema-locations=classpath:schema.sql\n\n"
+                + inicializacion
+                + "\n"
                 + "# Swagger UI\n"
                 + "springdoc.swagger-ui.path=/swagger-ui.html\n"
                 + "springdoc.api-docs.path=/api-docs\n\n"
@@ -317,7 +446,7 @@ public class MotorGeneracionSpringBoot {
         StringBuilder sb = new StringBuilder();
         sb.append("-- Schema generado por Plataforma UML Colaborativa\n\n");
         for (var c : persistentes) {
-            String tabla = snakeCase(str(c.get("nombre")));
+            String tabla = str(c.getOrDefault("nombre_tabla", snakeCase(str(c.get("nombre")))));
             sb.append("CREATE TABLE IF NOT EXISTS ").append(tabla).append(" (\n");
             sb.append("    id BIGSERIAL PRIMARY KEY");
             List<Map<String, Object>> atr = atribPorClase.getOrDefault(str(c.get("id")), List.of());
@@ -326,12 +455,26 @@ public class MotorGeneracionSpringBoot {
                 sb.append(",\n    ")
                         .append(snakeCase(str(a.get("nombre"))))
                         .append(" ")
-                        .append(tipoSql(str(a.get("tipo_uml"))));
+                        .append(tipoSqlAtributo(a));
                 if (bool(a.get("es_unico"))) sb.append(" UNIQUE");
             }
             sb.append("\n);\n\n");
         }
         return sb.toString();
+    }
+
+    private String generarLiquibase(String esquema) {
+        return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                + "<databaseChangeLog xmlns=\"http://www.liquibase.org/xml/ns/dbchangelog\"\n"
+                + "  xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n"
+                + "  xsi:schemaLocation=\"http://www.liquibase.org/xml/ns/dbchangelog "
+                + "https://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd\">\n"
+                + "  <changeSet id=\"1\" author=\"uml-colaborativo\">\n"
+                + "    <sql splitStatements=\"true\"><![CDATA[\n"
+                + esquema
+                + "    ]]></sql>\n"
+                + "  </changeSet>\n"
+                + "</databaseChangeLog>\n";
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -349,9 +492,11 @@ public class MotorGeneracionSpringBoot {
         sb.append("package ").append(paqueteBase).append(".modelo;\n\n");
         sb.append("import jakarta.persistence.*;\n");
         sb.append("import java.io.Serializable;\n");
+        sb.append("import java.math.BigDecimal;\n");
         sb.append("import java.time.LocalDate;\n");
         sb.append("import java.time.LocalDateTime;\n");
-        sb.append("import java.util.List;\n\n");
+        sb.append("import java.util.List;\n");
+        sb.append("import java.util.UUID;\n\n");
         sb.append("@Entity\n");
         sb.append("@Table(name = \"").append(snakeCase(nombreTabla)).append("\")\n");
         sb.append("public class ").append(cls).append(" implements Serializable {\n\n");
@@ -362,7 +507,7 @@ public class MotorGeneracionSpringBoot {
         for (var a : atributos) {
             if (bool(a.get("es_identificador"))) continue;
             String campo = campoJava(str(a.get("nombre")));
-            String tipo = tipoJava(str(a.get("tipo_uml")));
+            String tipo = tipoJavaAtributo(a);
             sb.append("\n    @Column(name = \"")
                     .append(snakeCase(str(a.get("nombre"))))
                     .append("\"");
@@ -376,7 +521,6 @@ public class MotorGeneracionSpringBoot {
             String destId = str(r.get("id_clase_destino"));
             String destNombre = idANombre.getOrDefault(destId, destId);
             String destCls = nomClase(destNombre);
-            String tipoRel = str(r.get("tipo_relacion"));
             Object maxDest = r.get("maximo_destino");
             boolean esColeccion =
                     maxDest == null || (maxDest instanceof Number n && n.intValue() != 1);
@@ -410,7 +554,7 @@ public class MotorGeneracionSpringBoot {
         for (var a : atributos) {
             if (bool(a.get("es_identificador"))) continue;
             String campo = campoJava(str(a.get("nombre")));
-            String tipo = tipoJava(str(a.get("tipo_uml")));
+            String tipo = tipoJavaAtributo(a);
             String cap = campo.substring(0, 1).toUpperCase() + campo.substring(1);
             sb.append("\n    public ")
                     .append(tipo)
@@ -467,7 +611,9 @@ public class MotorGeneracionSpringBoot {
         StringBuilder sb = new StringBuilder();
         sb.append("package ").append(paqueteBase).append(".dto;\n\n");
         sb.append("import java.time.LocalDate;\n");
-        sb.append("import java.time.LocalDateTime;\n\n");
+        sb.append("import java.time.LocalDateTime;\n");
+        sb.append("import java.math.BigDecimal;\n");
+        sb.append("import java.util.UUID;\n\n");
         sb.append("public class ").append(cls).append("Dto {\n\n");
 
         // Record de respuesta
@@ -477,7 +623,7 @@ public class MotorGeneracionSpringBoot {
         for (var a : atributos) {
             if (bool(a.get("es_identificador"))) continue;
             sb.append(",\n            ")
-                    .append(tipoJava(str(a.get("tipo_uml"))))
+                    .append(tipoJavaAtributo(a))
                     .append(" ")
                     .append(campoJava(str(a.get("nombre"))));
         }
@@ -493,7 +639,7 @@ public class MotorGeneracionSpringBoot {
             if (bool(a.get("es_identificador"))) continue;
             if (!primero) sb.append(",\n");
             sb.append("            ")
-                    .append(tipoJava(str(a.get("tipo_uml"))))
+                    .append(tipoJavaAtributo(a))
                     .append(" ")
                     .append(campoJava(str(a.get("nombre"))));
             primero = false;
@@ -505,10 +651,102 @@ public class MotorGeneracionSpringBoot {
     }
 
     // ═══════════════════════════════════════════════════════════════════
+    // Capa Servicio — CRUD y firmas UML seleccionadas
+    // ═══════════════════════════════════════════════════════════════════
+
+    private String generarServicio(
+            String paqueteBase,
+            String cls,
+            List<Map<String, Object>> operaciones,
+            Map<String, List<Map<String, Object>>> parametrosPorOperacion) {
+        String repositorio = campoJava(cls) + "Repositorio";
+        StringBuilder sb = new StringBuilder();
+        sb.append("package ").append(paqueteBase).append(".servicio;\n\n");
+        sb.append("import ").append(paqueteBase).append(".modelo.").append(cls).append(";\n");
+        sb.append("import ")
+                .append(paqueteBase)
+                .append(".repositorio.")
+                .append(cls)
+                .append("Repositorio;\n");
+        sb.append("import org.springframework.stereotype.Service;\n");
+        sb.append("import java.math.BigDecimal;\n");
+        sb.append("import java.time.LocalDate;\n");
+        sb.append("import java.time.LocalDateTime;\n");
+        sb.append("import java.util.List;\n");
+        sb.append("import java.util.Optional;\n");
+        sb.append("import java.util.UUID;\n\n");
+        sb.append("@Service\npublic class ").append(cls).append("Servicio {\n\n");
+        sb.append("    private final ")
+                .append(cls)
+                .append("Repositorio ")
+                .append(repositorio)
+                .append(";\n\n");
+        sb.append("    public ")
+                .append(cls)
+                .append("Servicio(")
+                .append(cls)
+                .append("Repositorio ")
+                .append(repositorio)
+                .append(") {\n        this.")
+                .append(repositorio)
+                .append(" = ")
+                .append(repositorio)
+                .append(";\n    }\n\n");
+        sb.append("    public List<")
+                .append(cls)
+                .append("> listar() { return ")
+                .append(repositorio)
+                .append(".findAll(); }\n");
+        sb.append("    public Optional<")
+                .append(cls)
+                .append("> obtener(Long id) { return ")
+                .append(repositorio)
+                .append(".findById(id); }\n");
+        sb.append("    public ")
+                .append(cls)
+                .append(" guardar(")
+                .append(cls)
+                .append(" entidad) { return ")
+                .append(repositorio)
+                .append(".save(entidad); }\n");
+        sb.append("    public void eliminar(Long id) { ")
+                .append(repositorio)
+                .append(".deleteById(id); }\n");
+        for (Map<String, Object> operacion : operaciones) {
+            String tipoRetorno = tipoJava(str(operacion.get("tipo_retorno")));
+            if (operacion.get("tipo_retorno") == null
+                    || "void".equalsIgnoreCase(str(operacion.get("tipo_retorno"))))
+                tipoRetorno = "void";
+            sb.append("\n    public ")
+                    .append(tipoRetorno)
+                    .append(" ")
+                    .append(campoJava(str(operacion.get("nombre"))))
+                    .append("(");
+            List<Map<String, Object>> parametros =
+                    parametrosPorOperacion.getOrDefault(str(operacion.get("id")), List.of());
+            for (int i = 0; i < parametros.size(); i++) {
+                if (i > 0) sb.append(", ");
+                Map<String, Object> parametro = parametros.get(i);
+                sb.append(tipoJava(str(parametro.get("tipo_uml"))))
+                        .append(" ")
+                        .append(campoJava(str(parametro.get("nombre"))));
+            }
+            sb.append(
+                    ") {\n"
+                            + "        throw new UnsupportedOperationException(\"Operación UML"
+                            + " pendiente de implementación\");\n"
+                            + "    }\n");
+        }
+        sb.append("}\n");
+        return sb.toString();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
     // Capa Controlador — REST CRUD completo
     // ═══════════════════════════════════════════════════════════════════
 
-    private String generarControlador(String paqueteBase, String cls, String nombre) {
+    private String generarControlador(
+            String paqueteBase, String cls, String nombre, boolean documentarRest) {
         String ruta = "/" + snakeCase(nombre).replace('_', '-') + "s";
         String campoInst = campoJava(cls);
         String campoRepo = campoInst + "Repositorio";
@@ -516,11 +754,6 @@ public class MotorGeneracionSpringBoot {
         return "package "
                 + paqueteBase
                 + ".controlador;\n\n"
-                + "import "
-                + paqueteBase
-                + ".dto."
-                + cls
-                + "Dto;\n"
                 + "import "
                 + paqueteBase
                 + ".modelo."
@@ -531,8 +764,10 @@ public class MotorGeneracionSpringBoot {
                 + ".repositorio."
                 + cls
                 + "Repositorio;\n"
-                + "import io.swagger.v3.oas.annotations.Operation;\n"
-                + "import io.swagger.v3.oas.annotations.tags.Tag;\n"
+                + (documentarRest
+                        ? "import io.swagger.v3.oas.annotations.Operation;\n"
+                                + "import io.swagger.v3.oas.annotations.tags.Tag;\n"
+                        : "")
                 + "import jakarta.validation.Valid;\n"
                 + "import org.springframework.http.ResponseEntity;\n"
                 + "import org.springframework.web.bind.annotation.*;\n\n"
@@ -541,11 +776,9 @@ public class MotorGeneracionSpringBoot {
                 + "@RequestMapping(\"/api"
                 + ruta
                 + "\")\n"
-                + "@Tag(name = \""
-                + cls
-                + "\", description = \"CRUD de "
-                + nombre
-                + "\")\n"
+                + (documentarRest
+                        ? "@Tag(name = \"" + cls + "\", description = \"CRUD de " + nombre + "\")\n"
+                        : "")
                 + "public class "
                 + cls
                 + "Controlador {\n\n"
@@ -568,9 +801,9 @@ public class MotorGeneracionSpringBoot {
                 + ";\n"
                 + "    }\n\n"
                 + "    @GetMapping\n"
-                + "    @Operation(summary = \"Listar todos los "
-                + nombre
-                + "\")\n"
+                + (documentarRest
+                        ? "    @Operation(summary = \"Listar todos los " + nombre + "\")\n"
+                        : "")
                 + "    public List<"
                 + cls
                 + "> listar() {\n"
@@ -579,9 +812,9 @@ public class MotorGeneracionSpringBoot {
                 + ".findAll();\n"
                 + "    }\n\n"
                 + "    @GetMapping(\"/{id}\")\n"
-                + "    @Operation(summary = \"Obtener un "
-                + nombre
-                + " por ID\")\n"
+                + (documentarRest
+                        ? "    @Operation(summary = \"Obtener un " + nombre + " por ID\")\n"
+                        : "")
                 + "    public ResponseEntity<"
                 + cls
                 + "> obtener(@PathVariable Long id) {\n"
@@ -592,9 +825,9 @@ public class MotorGeneracionSpringBoot {
                 + "                .orElse(ResponseEntity.notFound().build());\n"
                 + "    }\n\n"
                 + "    @PostMapping\n"
-                + "    @Operation(summary = \"Crear un nuevo "
-                + nombre
-                + "\")\n"
+                + (documentarRest
+                        ? "    @Operation(summary = \"Crear un nuevo " + nombre + "\")\n"
+                        : "")
                 + "    public "
                 + cls
                 + " crear(@Valid @RequestBody "
@@ -605,9 +838,9 @@ public class MotorGeneracionSpringBoot {
                 + ".save(entidad);\n"
                 + "    }\n\n"
                 + "    @PutMapping(\"/{id}\")\n"
-                + "    @Operation(summary = \"Actualizar un "
-                + nombre
-                + " existente\")\n"
+                + (documentarRest
+                        ? "    @Operation(summary = \"Actualizar un " + nombre + " existente\")\n"
+                        : "")
                 + "    public ResponseEntity<"
                 + cls
                 + "> actualizar(\n"
@@ -627,9 +860,9 @@ public class MotorGeneracionSpringBoot {
                 + "                .orElse(ResponseEntity.notFound().build());\n"
                 + "    }\n\n"
                 + "    @DeleteMapping(\"/{id}\")\n"
-                + "    @Operation(summary = \"Eliminar un "
-                + nombre
-                + "\")\n"
+                + (documentarRest
+                        ? "    @Operation(summary = \"Eliminar un " + nombre + "\")\n"
+                        : "")
                 + "    public ResponseEntity<Void> eliminar(@PathVariable Long id) {\n"
                 + "        if (!"
                 + campoRepo
@@ -677,6 +910,13 @@ public class MotorGeneracionSpringBoot {
         };
     }
 
+    private String tipoJavaAtributo(Map<String, Object> atributo) {
+        Object configurado = atributo.get("_tipo_java");
+        return configurado == null
+                ? tipoJava(str(atributo.get("tipo_uml")))
+                : configurado.toString();
+    }
+
     private String tipoSql(String uml) {
         if (uml == null) return "VARCHAR(255)";
         return switch (uml) {
@@ -690,6 +930,80 @@ public class MotorGeneracionSpringBoot {
             case "FechaHora", "TIMESTAMP" -> "TIMESTAMP";
             default -> "VARCHAR(255)";
         };
+    }
+
+    private String tipoSqlAtributo(Map<String, Object> atributo) {
+        Object configurado = atributo.get("_tipo_sql");
+        return configurado == null
+                ? tipoSql(str(atributo.get("tipo_uml")))
+                : configurado.toString();
+    }
+
+    private void aplicarMapeos(
+            List<Map<String, Object>> atributos, List<MapeoTipo> mapeosConfigurados) {
+        Map<String, MapeoTipo> mapeos = new HashMap<>();
+        for (MapeoTipo mapeo : mapeosConfigurados)
+            mapeos.put(mapeo.tipoUml().toLowerCase(Locale.ROOT), mapeo);
+        for (Map<String, Object> atributo : atributos) {
+            MapeoTipo mapeo = mapeos.get(str(atributo.get("tipo_uml")).toLowerCase(Locale.ROOT));
+            if (mapeo != null) {
+                atributo.put("_tipo_java", mapeo.tipoJava());
+                atributo.put("_tipo_sql", mapeo.tipoPostgresql());
+            }
+        }
+    }
+
+    private List<Dependencia> dependenciasPredeterminadas() {
+        return List.of(
+                new Dependencia(
+                        "org.springframework.boot",
+                        "spring-boot-starter-web",
+                        null,
+                        "COMPILACION",
+                        true),
+                new Dependencia(
+                        "org.springframework.boot",
+                        "spring-boot-starter-data-jpa",
+                        null,
+                        "COMPILACION",
+                        true),
+                new Dependencia(
+                        "org.springframework.boot",
+                        "spring-boot-starter-validation",
+                        null,
+                        "COMPILACION",
+                        true),
+                new Dependencia("org.postgresql", "postgresql", null, "EJECUCION", true),
+                new Dependencia(
+                        "org.springdoc",
+                        "springdoc-openapi-starter-webmvc-ui",
+                        "2.8.9",
+                        "COMPILACION",
+                        true),
+                new Dependencia(
+                        "org.springframework.boot",
+                        "spring-boot-starter-test",
+                        null,
+                        "PRUEBA",
+                        true));
+    }
+
+    private int contarArchivos(byte[] contenido) {
+        int total = 0;
+        try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(contenido))) {
+            while (zip.getNextEntry() != null) total++;
+            return total;
+        } catch (Exception e) {
+            throw new IllegalStateException("No se pudo contar el contenido generado.", e);
+        }
+    }
+
+    private String xml(String valor) {
+        return valor.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
+                .replace("'", "&apos;");
     }
 
     // ─── Transformaciones de nombres ─────────────────────────────────────────

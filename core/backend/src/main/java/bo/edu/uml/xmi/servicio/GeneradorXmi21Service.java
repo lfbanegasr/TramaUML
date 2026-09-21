@@ -19,7 +19,7 @@ public class GeneradorXmi21Service {
     private static final String XMI_NS = "http://schema.omg.org/spec/XMI/2.1";
     private static final String UML_NS = "http://schema.omg.org/spec/UML/2.1";
     private static final String EXPORTER = "Plataforma UML Colaborativa";
-    private static final String EXPORTER_VERSION = "0.13.0";
+    private static final String EXPORTER_VERSION = "0.14.0";
 
     // ─── Punto de entrada ────────────────────────────────────────────────────
 

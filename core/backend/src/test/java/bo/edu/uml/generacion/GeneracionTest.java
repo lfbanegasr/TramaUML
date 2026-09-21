@@ -2,7 +2,10 @@ package bo.edu.uml.generacion;
 
 import static org.assertj.core.api.Assertions.*;
 
+import bo.edu.uml.generacion.dto.GeneracionDto.Dependencia;
+import bo.edu.uml.generacion.dto.GeneracionDto.MapeoTipo;
 import bo.edu.uml.generacion.servicio.MotorGeneracionSpringBoot;
+import bo.edu.uml.generacion.servicio.MotorGeneracionSpringBoot.OpcionesGeneracion;
 
 import org.junit.jupiter.api.Test;
 
@@ -295,5 +298,118 @@ class GeneracionTest {
         assertThat(config).contains("OpenAPI");
         assertThat(config).contains("customOpenAPI");
         assertThat(config).contains("mi-app API");
+    }
+
+    @Test
+    void configuracionAvanzadaRespetaCapasDependenciasMapeosYMigracion() throws Exception {
+        String idClase = UUID.randomUUID().toString();
+        Map<String, Object> clase = clase(idClase, "Pago", true);
+        clase.put("nombre_tabla", "pagos_auditados");
+        clase.put("exponer_rest", false);
+        var atributo =
+                atributo(UUID.randomUUID().toString(), idClase, "monto", "Dinero", false, false);
+        var opciones =
+                new OpcionesGeneracion(
+                        "17",
+                        "3.5.16",
+                        "FLYWAY",
+                        true,
+                        false,
+                        false,
+                        false,
+                        false,
+                        List.of(
+                                new Dependencia(
+                                        "org.springframework.boot",
+                                        "spring-boot-starter-data-jpa",
+                                        null,
+                                        "COMPILACION",
+                                        true),
+                                new Dependencia(
+                                        "org.postgresql", "postgresql", null, "EJECUCION", true)),
+                        List.of(new MapeoTipo("Dinero", "BigDecimal", "NUMERIC(19,2)", null)));
+
+        var resultado =
+                motor.generar(
+                        "bo.edu",
+                        "pagos",
+                        "2.0.0",
+                        "bo.edu.pagos",
+                        opciones,
+                        List.of(clase),
+                        List.of(atributo),
+                        List.of(),
+                        List.of(),
+                        List.of());
+        var archivos = leerZip(resultado.contenido());
+
+        assertThat(archivos).containsKey("pagos/src/main/resources/db/migration/V1__schema.sql");
+        assertThat(archivos.keySet())
+                .noneMatch(k -> k.contains("controlador/") || k.contains("dto/"));
+        assertThat(archivos.get("pagos/pom.xml")).contains("<java.version>17</java.version>");
+        assertThat(archivos.get("pagos/pom.xml")).doesNotContain("springdoc-openapi");
+        assertThat(archivos.get("pagos/src/main/resources/db/migration/V1__schema.sql"))
+                .contains("pagos_auditados")
+                .contains("NUMERIC(19,2)");
+        assertThat(
+                        archivos.entrySet().stream()
+                                .filter(e -> e.getKey().endsWith("Pago.java"))
+                                .findFirst()
+                                .orElseThrow()
+                                .getValue())
+                .contains("private BigDecimal monto");
+    }
+
+    @Test
+    void generaServicioConOperacionesUmlSeleccionadas() throws Exception {
+        String idClase = UUID.randomUUID().toString();
+        String idOperacion = UUID.randomUUID().toString();
+        Map<String, Object> operacion = new LinkedHashMap<>();
+        operacion.put("id", idOperacion);
+        operacion.put("id_clase", idClase);
+        operacion.put("nombre", "calcularTotal");
+        operacion.put("tipo_retorno", "Double");
+        Map<String, Object> parametro = new LinkedHashMap<>();
+        parametro.put("id_operacion", idOperacion);
+        parametro.put("nombre", "descuento");
+        parametro.put("tipo_uml", "Double");
+        var opciones =
+                new OpcionesGeneracion(
+                        "21",
+                        "3.5.16",
+                        "NINGUNO",
+                        true,
+                        true,
+                        false,
+                        false,
+                        false,
+                        List.of(
+                                new Dependencia(
+                                        "org.springframework.boot",
+                                        "spring-boot-starter-data-jpa",
+                                        null,
+                                        "COMPILACION",
+                                        true)),
+                        List.of());
+
+        var resultado =
+                motor.generar(
+                        "bo.edu",
+                        "ventas",
+                        "1.0.0",
+                        "bo.edu.ventas",
+                        opciones,
+                        List.of(clase(idClase, "Pedido", true)),
+                        List.of(),
+                        List.of(),
+                        List.of(operacion),
+                        List.of(parametro));
+        var servicio =
+                leerZip(resultado.contenido()).entrySet().stream()
+                        .filter(e -> e.getKey().endsWith("PedidoServicio.java"))
+                        .findFirst()
+                        .orElseThrow()
+                        .getValue();
+        assertThat(servicio).contains("Double calcularTotal(Double descuento)");
     }
 }

@@ -38,8 +38,10 @@ public class GeneracionControlador {
     /** CU29 — Consulta la configuración de generación vigente (o devuelve defaults). */
     @GetMapping("/configuracion")
     public ConfiguracionGeneracion leerConfiguracion(
-            @AuthenticationPrincipal Identidad actor, @PathVariable UUID modelo) {
-        return servicio.leerConfiguracion(actor, modelo);
+            @AuthenticationPrincipal Identidad actor,
+            @PathVariable UUID modelo,
+            @RequestParam(required = false) UUID version) {
+        return servicio.leerConfiguracion(actor, modelo, version);
     }
 
     /** CU29 — Guarda o actualiza la configuración de generación del modelo. */
@@ -54,8 +56,10 @@ public class GeneracionControlador {
     /** CU30 — Genera el proyecto Spring Boot completo en 4 capas y devuelve metadatos. */
     @PostMapping("/generar")
     public ResultadoGeneracion generar(
-            @AuthenticationPrincipal Identidad actor, @PathVariable UUID modelo) {
-        return servicio.generar(actor, modelo);
+            @AuthenticationPrincipal Identidad actor,
+            @PathVariable UUID modelo,
+            @RequestBody(required = false) SolicitudGeneracion solicitud) {
+        return servicio.generar(actor, modelo, solicitud);
     }
 
     /** CU32 — Descarga el ZIP del proyecto generado como attachment. */

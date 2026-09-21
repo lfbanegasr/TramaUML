@@ -1,14 +1,47 @@
 import { useEffect, useState } from 'react';
 import {
-  leerConfigGeneracion,
-  guardarConfigGeneracion,
-  generarBackend,
   descargarArtefacto,
+  generarBackend,
+  guardarConfigGeneracion,
+  leerConfigGeneracion,
   type ActualizarConfiguracion,
+  type ConfiguracionGeneracion,
   type ResultadoGeneracion,
 } from '../api/generacionApi';
 
 type Estado = 'cargando' | 'listo' | 'guardando' | 'generando' | 'completado' | 'error';
+
+const solicitud = (cfg: ConfiguracionGeneracion): ActualizarConfiguracion => ({
+  idVersionModelo: cfg.idVersionModelo,
+  nombre: cfg.nombre,
+  nombreProyecto: cfg.nombreProyecto,
+  idGrupo: cfg.idGrupo,
+  idArtefacto: cfg.idArtefacto,
+  paqueteBase: cfg.paqueteBase,
+  versionInicial: cfg.versionInicial,
+  versionJava: cfg.versionJava,
+  versionSpringBoot: cfg.versionSpringBoot,
+  herramientaMigracion: cfg.herramientaMigracion,
+  generarRepositorios: cfg.generarRepositorios,
+  generarServicios: cfg.generarServicios,
+  generarControladores: cfg.generarControladores,
+  generarDtos: cfg.generarDtos,
+  exponerRest: cfg.exponerRest,
+  clases: cfg.clases.map((clase) => ({
+    idClase: clase.idClase,
+    seleccionada: clase.seleccionada,
+    esPersistente: clase.esPersistente,
+    exponerRest: clase.exponerRest,
+    nombreTabla: clase.nombreTabla,
+    nombreEntidad: clase.nombreEntidad,
+    operaciones: clase.operaciones.map((operacion) => ({
+      idOperacion: operacion.id,
+      seleccionada: operacion.seleccionada,
+    })),
+  })),
+  mapeosTipo: cfg.mapeosTipo,
+  dependencias: cfg.dependencias,
+});
 
 export function GenerarBackendDialog({
   modelo,
@@ -20,55 +53,74 @@ export function GenerarBackendDialog({
   cerrar: () => void;
 }) {
   const [estado, setEstado] = useState<Estado>('cargando');
-  const [cfg, setCfg] = useState<ActualizarConfiguracion>({
-    nombre: 'Mi Proyecto',
-    nombreProyecto: nombreModelo.toLowerCase().replace(/[^a-z0-9-]/g, '-'),
-    idGrupo: 'com.empresa',
-    idArtefacto: nombreModelo.toLowerCase().replace(/[^a-z0-9-]/g, '-'),
-    paqueteBase: 'com.empresa.' + nombreModelo.toLowerCase().replace(/[^a-z0-9]/g, ''),
-    versionInicial: '1.0.0-SNAPSHOT',
-    generarRepositorios: true,
-    generarControladores: true,
-    generarDtos: true,
-    exponerRest: true,
-  });
+  const [cfg, setCfg] = useState<ConfiguracionGeneracion | null>(null);
   const [resultado, setResultado] = useState<ResultadoGeneracion | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let activo = true;
     leerConfigGeneracion(modelo)
-      .then((c) => {
-        if (!activo) return;
-        setCfg({
-          nombre: c.nombre,
-          nombreProyecto: c.nombreProyecto,
-          idGrupo: c.idGrupo,
-          idArtefacto: c.idArtefacto,
-          paqueteBase: c.paqueteBase,
-          versionInicial: c.versionInicial,
-          generarRepositorios: c.generarRepositorios,
-          generarControladores: c.generarControladores,
-          generarDtos: c.generarDtos,
-          exponerRest: c.exponerRest,
-        });
-        setEstado('listo');
+      .then((configuracion) => {
+        if (activo) {
+          setCfg(configuracion);
+          setEstado('listo');
+        }
       })
-      .catch(() => {
-        if (activo) setEstado('listo'); // usar defaults si falla
+      .catch((e: unknown) => {
+        if (activo) {
+          setError(e instanceof Error ? e.message : 'No se pudo leer la configuración.');
+          setEstado('error');
+        }
       });
     return () => {
       activo = false;
     };
   }, [modelo]);
 
-  async function generar() {
+  const cambiar = <K extends keyof ConfiguracionGeneracion>(
+    clave: K,
+    valor: ConfiguracionGeneracion[K],
+  ) => setCfg((actual) => (actual ? { ...actual, [clave]: valor } : actual));
+
+  async function cambiarVersion(version: string) {
+    setEstado('cargando');
+    setError(null);
+    try {
+      setCfg(await leerConfigGeneracion(modelo, version));
+      setEstado('listo');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo cargar la versión.');
+      setEstado('error');
+    }
+  }
+
+  async function guardar(): Promise<ConfiguracionGeneracion | null> {
+    if (!cfg) return null;
     setEstado('guardando');
     setError(null);
     try {
-      await guardarConfigGeneracion(modelo, cfg);
-      setEstado('generando');
-      const res = await generarBackend(modelo);
+      const guardada = await guardarConfigGeneracion(modelo, solicitud(cfg));
+      setCfg(guardada);
+      setEstado('listo');
+      return guardada;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo guardar la configuración.');
+      setEstado('error');
+      return null;
+    }
+  }
+
+  async function generar() {
+    const guardada = await guardar();
+    if (!guardada?.id) return;
+    if (!guardada.puedeGenerar) {
+      setError('Revisa los mensajes de configuración antes de generar.');
+      setEstado('error');
+      return;
+    }
+    setEstado('generando');
+    try {
+      const res = await generarBackend(modelo, guardada.id);
       setResultado(res);
       await descargarArtefacto(modelo, res.idGeneracion, res.nombreArchivo);
       setEstado('completado');
@@ -81,15 +133,10 @@ export function GenerarBackendDialog({
   const ocupado = estado === 'cargando' || estado === 'guardando' || estado === 'generando';
 
   return (
-    <div
-      className="dialog-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="gen-dialog-title"
-    >
+    <div className="dialog-backdrop" role="dialog" aria-modal="true" aria-labelledby="gen-title">
       <div className="dialog dialog-wide">
         <div className="dialog-header">
-          <h2 id="gen-dialog-title">Generar Backend Spring Boot</h2>
+          <h2 id="gen-title">Configuración avanzada del backend</h2>
           <button
             className="dialog-close"
             aria-label="Cerrar diálogo"
@@ -102,148 +149,389 @@ export function GenerarBackendDialog({
 
         <div className="dialog-body">
           <p className="dialog-desc">
-            Genera un proyecto Spring Boot completo (Java 21 / Maven / PostgreSQL) con 4 capas a
-            partir del modelo <em>{nombreModelo}</em>. El proyecto incluye entidades JPA,
-            repositorios, controladores REST con CRUD completo, DTOs y Swagger UI.
+            Configura una generación reproducible de <em>{nombreModelo}</em> sobre una versión UML
+            congelada. La validación semántica de esa versión es obligatoria antes de generar.
           </p>
 
-          {estado === 'cargando' && (
-            <p className="dialog-status">
-              <span className="spinner" aria-hidden="true" /> Cargando configuración…
-            </p>
+          {estado === 'cargando' && <p className="dialog-status">Cargando configuración…</p>}
+
+          {cfg && estado !== 'cargando' && (
+            <>
+              <div className="form-grid">
+                <div className="form-group">
+                  <label htmlFor="gen-version-modelo">Versión del modelo</label>
+                  <select
+                    id="gen-version-modelo"
+                    value={cfg.idVersionModelo}
+                    onChange={(e) => void cambiarVersion(e.target.value)}
+                    disabled={ocupado}
+                  >
+                    {cfg.versionesDisponibles.map((version) => (
+                      <option key={version.id} value={version.id}>
+                        v{version.numeroVersion} · rev. {version.revision} ·{' '}
+                        {version.estadoValidacion}
+                        {version.versionActual ? ' · actual' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="gen-nombre">Nombre de configuración</label>
+                  <input
+                    id="gen-nombre"
+                    value={cfg.nombre}
+                    onChange={(e) => cambiar('nombre', e.target.value)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="gen-proyecto">Nombre del proyecto generado</label>
+                  <input
+                    id="gen-proyecto"
+                    value={cfg.nombreProyecto}
+                    onChange={(e) => cambiar('nombreProyecto', e.target.value)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="gen-grupo">Group ID</label>
+                  <input
+                    id="gen-grupo"
+                    value={cfg.idGrupo}
+                    onChange={(e) => cambiar('idGrupo', e.target.value)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="gen-artefacto">Artifact ID</label>
+                  <input
+                    id="gen-artefacto"
+                    value={cfg.idArtefacto}
+                    onChange={(e) => cambiar('idArtefacto', e.target.value)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="gen-version">Versión inicial</label>
+                  <input
+                    id="gen-version"
+                    value={cfg.versionInicial}
+                    onChange={(e) => cambiar('versionInicial', e.target.value)}
+                  />
+                </div>
+                <div className="form-group form-full">
+                  <label htmlFor="gen-paquete">Paquete base Java</label>
+                  <input
+                    id="gen-paquete"
+                    value={cfg.paqueteBase}
+                    onChange={(e) => cambiar('paqueteBase', e.target.value)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="gen-java">Java</label>
+                  <select
+                    id="gen-java"
+                    value={cfg.versionJava}
+                    onChange={(e) => cambiar('versionJava', e.target.value)}
+                  >
+                    <option value="21">21</option>
+                    <option value="17">17</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="gen-spring">Spring Boot</label>
+                  <input
+                    id="gen-spring"
+                    value={cfg.versionSpringBoot}
+                    onChange={(e) => cambiar('versionSpringBoot', e.target.value)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="gen-migracion">Migraciones</label>
+                  <select
+                    id="gen-migracion"
+                    value={cfg.herramientaMigracion}
+                    onChange={(e) =>
+                      cambiar(
+                        'herramientaMigracion',
+                        e.target.value as ConfiguracionGeneracion['herramientaMigracion'],
+                      )
+                    }
+                  >
+                    <option value="FLYWAY">Flyway</option>
+                    <option value="LIQUIBASE">Liquibase</option>
+                    <option value="NINGUNO">schema.sql</option>
+                  </select>
+                </div>
+              </div>
+
+              <fieldset className="checkbox-group">
+                <legend>Capas</legend>
+                {(
+                  [
+                    ['generarRepositorios', 'Repositorios JPA'],
+                    ['generarServicios', 'Servicios'],
+                    ['generarControladores', 'Controladores CRUD'],
+                    ['generarDtos', 'DTOs inmutables'],
+                    ['exponerRest', 'REST y OpenAPI'],
+                  ] as const
+                ).map(([clave, etiqueta]) => (
+                  <label key={clave}>
+                    <input
+                      type="checkbox"
+                      checked={cfg[clave]}
+                      onChange={(e) => cambiar(clave, e.target.checked)}
+                    />
+                    {etiqueta}
+                  </label>
+                ))}
+              </fieldset>
+
+              <fieldset className="checkbox-group">
+                <legend>
+                  Clases y operaciones ({cfg.clases.filter((c) => c.seleccionada).length}{' '}
+                  seleccionadas)
+                </legend>
+                {cfg.clases.map((clase, indice) => (
+                  <div key={clase.idClase} className="form-group form-full">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={clase.seleccionada}
+                        disabled={clase.requerida}
+                        onChange={(e) => {
+                          const clases = [...cfg.clases];
+                          clases[indice] = { ...clase, seleccionada: e.target.checked };
+                          cambiar('clases', clases);
+                        }}
+                      />
+                      <strong>{clase.nombre}</strong>
+                      {clase.requerida ? ' · requerida por una relación' : ''}
+                    </label>
+                    {clase.seleccionada && (
+                      <div className="form-grid">
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={clase.esPersistente}
+                            onChange={(e) => {
+                              const clases = [...cfg.clases];
+                              clases[indice] = { ...clase, esPersistente: e.target.checked };
+                              cambiar('clases', clases);
+                            }}
+                          />
+                          Generar entidad persistente
+                        </label>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={clase.exponerRest}
+                            onChange={(e) => {
+                              const clases = [...cfg.clases];
+                              clases[indice] = { ...clase, exponerRest: e.target.checked };
+                              cambiar('clases', clases);
+                            }}
+                          />
+                          Exponer controlador REST
+                        </label>
+                        <input
+                          aria-label={'Entidad de ' + clase.nombre}
+                          value={clase.nombreEntidad}
+                          onChange={(e) => {
+                            const clases = [...cfg.clases];
+                            clases[indice] = { ...clase, nombreEntidad: e.target.value };
+                            cambiar('clases', clases);
+                          }}
+                        />
+                        <input
+                          aria-label={'Tabla de ' + clase.nombre}
+                          value={clase.nombreTabla}
+                          onChange={(e) => {
+                            const clases = [...cfg.clases];
+                            clases[indice] = { ...clase, nombreTabla: e.target.value };
+                            cambiar('clases', clases);
+                          }}
+                        />
+                        {clase.operaciones.map((operacion, opIndice) => (
+                          <label key={operacion.id}>
+                            <input
+                              type="checkbox"
+                              checked={operacion.seleccionada}
+                              onChange={(e) => {
+                                const clases = [...cfg.clases];
+                                const operaciones = [...clase.operaciones];
+                                operaciones[opIndice] = {
+                                  ...operacion,
+                                  seleccionada: e.target.checked,
+                                };
+                                clases[indice] = { ...clase, operaciones };
+                                cambiar('clases', clases);
+                              }}
+                            />
+                            {operacion.nombre}(): {operacion.tipoRetorno || 'void'}
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </fieldset>
+
+              <details>
+                <summary>Mapeos de tipos ({cfg.mapeosTipo.length})</summary>
+                <div className="form-grid">
+                  {cfg.mapeosTipo.map((mapeo, indice) => (
+                    <div className="form-group" key={mapeo.tipoUml}>
+                      <label>{mapeo.tipoUml}</label>
+                      <input
+                        aria-label={'Java para ' + mapeo.tipoUml}
+                        value={mapeo.tipoJava}
+                        onChange={(e) => {
+                          const mapeos = [...cfg.mapeosTipo];
+                          mapeos[indice] = { ...mapeo, tipoJava: e.target.value };
+                          cambiar('mapeosTipo', mapeos);
+                        }}
+                      />
+                      <input
+                        aria-label={'PostgreSQL para ' + mapeo.tipoUml}
+                        value={mapeo.tipoPostgresql}
+                        onChange={(e) => {
+                          const mapeos = [...cfg.mapeosTipo];
+                          mapeos[indice] = { ...mapeo, tipoPostgresql: e.target.value };
+                          cambiar('mapeosTipo', mapeos);
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </details>
+
+              <details>
+                <summary>Dependencias Maven ({cfg.dependencias.length})</summary>
+                <p>Las dependencias obligatorias se conservan al guardar la configuración.</p>
+                <ul className="dialog-stats">
+                  {cfg.dependencias.map((dependencia, indice) => (
+                    <li key={dependencia.idGrupo + ':' + dependencia.idArtefacto}>
+                      <code>
+                        {dependencia.idGrupo}:{dependencia.idArtefacto}
+                      </code>
+                      {dependencia.version ? ':' + dependencia.version : ''} · {dependencia.ambito}
+                      {dependencia.obligatoria ? ' · obligatoria' : ''}
+                      {!dependencia.obligatoria && (
+                        <button
+                          type="button"
+                          aria-label={'Quitar dependencia ' + dependencia.idArtefacto}
+                          onClick={() =>
+                            cambiar(
+                              'dependencias',
+                              cfg.dependencias.filter((_, actual) => actual !== indice),
+                            )
+                          }
+                        >
+                          Quitar
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                <button
+                  type="button"
+                  onClick={() =>
+                    cambiar('dependencias', [
+                      ...cfg.dependencias,
+                      {
+                        idGrupo: 'org.example',
+                        idArtefacto: 'dependencia-' + (cfg.dependencias.length + 1),
+                        version: '1.0.0',
+                        ambito: 'COMPILACION',
+                        obligatoria: false,
+                      },
+                    ])
+                  }
+                >
+                  Añadir dependencia Maven
+                </button>
+                {cfg.dependencias.map((dependencia, indice) =>
+                  dependencia.obligatoria ? null : (
+                    <div className="form-grid" key={'editar-' + indice}>
+                      <input
+                        aria-label={'Grupo dependencia ' + (indice + 1)}
+                        value={dependencia.idGrupo}
+                        onChange={(e) => {
+                          const dependencias = [...cfg.dependencias];
+                          dependencias[indice] = { ...dependencia, idGrupo: e.target.value };
+                          cambiar('dependencias', dependencias);
+                        }}
+                      />
+                      <input
+                        aria-label={'Artefacto dependencia ' + (indice + 1)}
+                        value={dependencia.idArtefacto}
+                        onChange={(e) => {
+                          const dependencias = [...cfg.dependencias];
+                          dependencias[indice] = { ...dependencia, idArtefacto: e.target.value };
+                          cambiar('dependencias', dependencias);
+                        }}
+                      />
+                      <input
+                        aria-label={'Versión dependencia ' + (indice + 1)}
+                        value={dependencia.version ?? ''}
+                        onChange={(e) => {
+                          const dependencias = [...cfg.dependencias];
+                          dependencias[indice] = {
+                            ...dependencia,
+                            version: e.target.value || null,
+                          };
+                          cambiar('dependencias', dependencias);
+                        }}
+                      />
+                      <select
+                        aria-label={'Ámbito dependencia ' + (indice + 1)}
+                        value={dependencia.ambito}
+                        onChange={(e) => {
+                          const dependencias = [...cfg.dependencias];
+                          dependencias[indice] = {
+                            ...dependencia,
+                            ambito: e.target.value as typeof dependencia.ambito,
+                          };
+                          cambiar('dependencias', dependencias);
+                        }}
+                      >
+                        <option value="COMPILACION">Compilación</option>
+                        <option value="EJECUCION">Ejecución</option>
+                        <option value="PRUEBA">Prueba</option>
+                        <option value="PROVISTO">Provisto</option>
+                      </select>
+                    </div>
+                  ),
+                )}
+              </details>
+
+              {cfg.mensajes.length > 0 && (
+                <div aria-live="polite">
+                  {cfg.mensajes.map((mensaje) => (
+                    <p
+                      key={mensaje.codigo + mensaje.mensaje}
+                      className={mensaje.nivel === 'ERROR' ? 'dialog-error' : 'dialog-hint'}
+                    >
+                      {mensaje.mensaje}
+                    </p>
+                  ))}
+                </div>
+              )}
+            </>
           )}
 
-          {(estado === 'listo' || estado === 'error') && (
-            <div className="form-grid">
-              <div className="form-group">
-                <label htmlFor="gen-nombre">Nombre del proyecto</label>
-                <input
-                  id="gen-nombre"
-                  type="text"
-                  value={cfg.nombre}
-                  onChange={(e) => setCfg((c) => ({ ...c, nombre: e.target.value }))}
-                  disabled={ocupado}
-                />
-              </div>
-              <div className="form-group">
-                <label htmlFor="gen-grupo">Group ID (Maven)</label>
-                <input
-                  id="gen-grupo"
-                  type="text"
-                  placeholder="com.empresa"
-                  value={cfg.idGrupo}
-                  onChange={(e) => setCfg((c) => ({ ...c, idGrupo: e.target.value }))}
-                  disabled={ocupado}
-                />
-              </div>
-              <div className="form-group">
-                <label htmlFor="gen-artefacto">Artifact ID (Maven)</label>
-                <input
-                  id="gen-artefacto"
-                  type="text"
-                  placeholder="mi-sistema"
-                  value={cfg.idArtefacto}
-                  onChange={(e) => setCfg((c) => ({ ...c, idArtefacto: e.target.value }))}
-                  disabled={ocupado}
-                />
-              </div>
-              <div className="form-group">
-                <label htmlFor="gen-version">Versión inicial</label>
-                <input
-                  id="gen-version"
-                  type="text"
-                  placeholder="1.0.0-SNAPSHOT"
-                  value={cfg.versionInicial}
-                  onChange={(e) => setCfg((c) => ({ ...c, versionInicial: e.target.value }))}
-                  disabled={ocupado}
-                />
-              </div>
-              <div className="form-group form-full">
-                <label htmlFor="gen-paquete">Paquete base Java</label>
-                <input
-                  id="gen-paquete"
-                  type="text"
-                  placeholder="com.empresa.sistema"
-                  value={cfg.paqueteBase}
-                  onChange={(e) => setCfg((c) => ({ ...c, paqueteBase: e.target.value }))}
-                  disabled={ocupado}
-                />
-              </div>
-              <div className="form-group form-full">
-                <fieldset className="checkbox-group">
-                  <legend>Capas a generar</legend>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={cfg.generarRepositorios}
-                      onChange={(e) =>
-                        setCfg((c) => ({ ...c, generarRepositorios: e.target.checked }))
-                      }
-                      disabled={ocupado}
-                    />
-                    Repositorios JPA
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={cfg.generarControladores}
-                      onChange={(e) =>
-                        setCfg((c) => ({ ...c, generarControladores: e.target.checked }))
-                      }
-                      disabled={ocupado}
-                    />
-                    Controladores REST con CRUD
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={cfg.generarDtos}
-                      onChange={(e) => setCfg((c) => ({ ...c, generarDtos: e.target.checked }))}
-                      disabled={ocupado}
-                    />
-                    DTOs (Records inmutables)
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={cfg.exponerRest}
-                      onChange={(e) => setCfg((c) => ({ ...c, exponerRest: e.target.checked }))}
-                      disabled={ocupado}
-                    />
-                    Swagger UI (OpenAPI)
-                  </label>
-                </fieldset>
-              </div>
-            </div>
-          )}
-
-          {estado === 'guardando' && (
-            <p className="dialog-status">
-              <span className="spinner" aria-hidden="true" /> Guardando configuración…
-            </p>
-          )}
+          {estado === 'guardando' && <p className="dialog-status">Guardando configuración…</p>}
           {estado === 'generando' && (
-            <p className="dialog-status">
-              <span className="spinner" aria-hidden="true" /> Generando proyecto Spring Boot…
-            </p>
+            <p className="dialog-status">Generando proyecto Spring Boot…</p>
           )}
           {estado === 'completado' && resultado && (
             <div className="dialog-success" role="status">
-              <p>✓ Proyecto generado y descargado</p>
+              <p>✓ Proyecto generado desde una versión UML congelada</p>
               <ul className="dialog-stats">
+                <li>{resultado.totalClases} clases</li>
+                <li>{resultado.totalOperaciones} operaciones seleccionadas</li>
+                <li>{resultado.totalArchivosGenerados} archivos</li>
                 <li>
-                  <strong>{resultado.totalClases}</strong> clases procesadas
-                </li>
-                <li>
-                  <strong>{resultado.totalArchivosGenerados}</strong> archivos generados
-                </li>
-                <li>
-                  Archivo: <code>{resultado.nombreArchivo}</code>
+                  <code>{resultado.nombreArchivo}</code>
                 </li>
               </ul>
-              <p className="dialog-hint">
-                Extrae el ZIP y ejecuta <code>mvn spring-boot:run</code> para iniciar el servidor.
-              </p>
             </div>
           )}
           {estado === 'error' && error && (
@@ -255,17 +543,22 @@ export function GenerarBackendDialog({
 
         <div className="dialog-footer">
           <button onClick={cerrar} disabled={ocupado}>
-            {estado === 'completado' ? 'Cerrar' : 'Cancelar'}
+            Cerrar
           </button>
-          {estado !== 'completado' && (
-            <button
-              id="btn-confirmar-generar-backend"
-              className="primary"
-              onClick={generar}
-              disabled={ocupado}
-            >
-              {ocupado ? 'Generando…' : 'Generar y descargar ZIP'}
-            </button>
+          {cfg && estado !== 'completado' && (
+            <>
+              <button onClick={() => void guardar()} disabled={ocupado}>
+                Guardar
+              </button>
+              <button
+                id="btn-confirmar-generar-backend"
+                className="primary"
+                onClick={() => void generar()}
+                disabled={ocupado}
+              >
+                Guardar, generar y descargar
+              </button>
+            </>
           )}
         </div>
       </div>

@@ -72,6 +72,7 @@ Invoke-Pg 'psql.exe' @('-X','-v','ON_ERROR_STOP=1','-h','127.0.0.1','-p',"$Puert
 Invoke-Pg 'psql.exe' @('-X','-v','ON_ERROR_STOP=1','-h','127.0.0.1','-p',"$Puerto",'-U','uml_test_owner','-d',$testDatabase,'-f',(Join-Path $implementationRoot 'core\docs\migraciones\2026-09-19_05_asistencia_inteligente_permisos.sql'))
 Invoke-Pg 'psql.exe' @('-X','-v','ON_ERROR_STOP=1','-h','127.0.0.1','-p',"$Puerto",'-U','uml_test_owner','-d',$testDatabase,'-f',(Join-Path $implementationRoot 'core\docs\migraciones\2026-09-20_06_servicios_plataforma_seguridad.sql'))
 Invoke-Pg 'psql.exe' @('-X','-v','ON_ERROR_STOP=1','-h','127.0.0.1','-p',"$Puerto",'-U','uml_test_owner','-d',$testDatabase,'-f',(Join-Path $implementationRoot 'core\docs\migraciones\2026-09-20_07_revision_asistencia_lectura.sql'))
+Invoke-Pg 'psql.exe' @('-X','-v','ON_ERROR_STOP=1','-h','127.0.0.1','-p',"$Puerto",'-U','uml_test_owner','-d',$testDatabase,'-f',(Join-Path $implementationRoot 'core\docs\migraciones\2026-09-21_08_generacion_backend_avanzada.sql'))
 $env:UML_TEST_DB_URL = "jdbc:postgresql://127.0.0.1:$Puerto/$testDatabase" + '?currentSchema=uml_colaborativo,public'
 Invoke-Pg 'psql.exe' @('-X','-v','ON_ERROR_STOP=1','-h','127.0.0.1','-p',"$Puerto",'-U','uml_test_owner','-d',$testDatabase,'-c','ALTER ROLE uml_app LOGIN')
 Write-Output "Base ficticia preparada: $testDatabase (127.0.0.1:$Puerto). Se conserva para inspección."

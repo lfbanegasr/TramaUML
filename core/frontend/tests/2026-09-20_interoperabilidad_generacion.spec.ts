@@ -67,7 +67,7 @@ test('importa un XMI mediante previsualización y confirmación explícita', asy
   await expect(page.getByRole('dialog')).toContainText('CLASE Importada');
   await expect(page.getByTestId('clase-uml').filter({ hasText: 'Importada' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Aplicar importación', exact: true }).click();
-  await expect(page.getByRole('dialog').getByRole('status')).toContainText(
+  await expect(page.getByRole('dialog').locator('.dialog-success')).toContainText(
     'Importación aplicada y versionada',
   );
   await page.getByRole('button', { name: 'Cerrar', exact: true }).click();
@@ -77,16 +77,30 @@ test('importa un XMI mediante previsualización y confirmación explícita', asy
 
 test('configura, genera y descarga un backend desde el editor', async ({ page }) => {
   await modeloConClase(page, 'Generable');
+  await page.getByTestId('clase-uml').filter({ hasText: 'Generable' }).click();
+  await page.getByRole('button', { name: /Añadir atributo/ }).click();
+  await page.getByLabel('Nombre', { exact: true }).fill('id');
+  await page.getByLabel('Tipo UML').fill('UUID');
+  await page.getByLabel('Identificador').check();
+  await page.getByRole('button', { name: 'Guardar elemento', exact: true }).click();
+  await page.getByRole('button', { name: 'Informe de validación' }).click();
+  await page.getByRole('button', { name: 'Validar modelo' }).click();
+  await expect(page.getByLabel('Informe de validación').getByRole('status')).toContainText(
+    /VALIDO/,
+    { timeout: 15_000 },
+  );
   await page.getByRole('button', { name: 'Generar Backend', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Generar Backend Spring Boot' })).toBeVisible();
-  await expect(page.getByLabel('Group ID (Maven)')).toBeVisible();
-  await page.getByLabel('Group ID (Maven)').fill('bo.edu.prueba');
-  await page.getByLabel('Artifact ID (Maven)').fill('backend-prueba');
+  await expect(
+    page.getByRole('heading', { name: 'Configuración avanzada del backend' }),
+  ).toBeVisible();
+  await expect(page.getByLabel('Group ID')).toBeVisible();
+  await page.getByLabel('Group ID').fill('bo.edu.prueba');
+  await page.getByLabel('Artifact ID').fill('backend-prueba');
   await page.getByLabel('Paquete base Java').fill('bo.edu.prueba.backend');
   const descarga = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Generar y descargar ZIP', exact: true }).click();
+  await page.getByRole('button', { name: 'Guardar, generar y descargar', exact: true }).click();
   expect((await descarga).suggestedFilename()).toMatch(/\.zip$/);
   const resultado = page.getByRole('dialog').getByRole('status');
-  await expect(resultado).toContainText('Proyecto generado y descargado');
-  await expect(resultado).toContainText('1 clases procesadas');
+  await expect(resultado).toContainText('Proyecto generado desde una versión UML congelada');
+  await expect(resultado).toContainText('1 clases');
 });

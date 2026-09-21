@@ -1,34 +1,137 @@
 import { api } from '../../../shared/api';
 
+export type VersionGeneracion = {
+  id: string;
+  numeroVersion: number;
+  revision: number;
+  estadoValidacion: string;
+  versionActual: boolean;
+};
+
+export type OperacionGeneracion = {
+  id: string;
+  nombre: string;
+  tipoRetorno: string | null;
+  seleccionada: boolean;
+};
+
+export type ClaseGeneracion = {
+  idClase: string;
+  nombre: string;
+  seleccionada: boolean;
+  requerida: boolean;
+  requeridaPor: string[];
+  esPersistente: boolean;
+  exponerRest: boolean;
+  nombreTabla: string;
+  nombreEntidad: string;
+  operaciones: OperacionGeneracion[];
+};
+
+export type MapeoTipo = {
+  tipoUml: string;
+  tipoJava: string;
+  tipoPostgresql: string;
+  claseConversor: string | null;
+};
+
+export type DependenciaGeneracion = {
+  idGrupo: string;
+  idArtefacto: string;
+  version: string | null;
+  ambito: 'COMPILACION' | 'EJECUCION' | 'PRUEBA' | 'PROVISTO';
+  obligatoria: boolean;
+};
+
+export type MensajeConfiguracion = {
+  nivel: 'ERROR' | 'ADVERTENCIA' | 'INFORMACION';
+  codigo: string;
+  mensaje: string;
+};
+
 export type ConfiguracionGeneracion = {
   id: string | null;
+  idVersionModelo: string;
+  numeroVersion: number;
+  revisionVersion: number;
+  versionActual: boolean;
+  estadoVersion: string;
+  estado: string;
   nombre: string;
   nombreProyecto: string;
   idGrupo: string;
   idArtefacto: string;
   paqueteBase: string;
   versionInicial: string;
+  versionJava: string;
+  versionSpringBoot: string;
+  herramientaMigracion: 'FLYWAY' | 'LIQUIBASE' | 'NINGUNO';
   generarRepositorios: boolean;
+  generarServicios: boolean;
   generarControladores: boolean;
   generarDtos: boolean;
   exponerRest: boolean;
+  versionesDisponibles: VersionGeneracion[];
+  clases: ClaseGeneracion[];
+  mapeosTipo: MapeoTipo[];
+  dependencias: DependenciaGeneracion[];
+  mensajes: MensajeConfiguracion[];
+  puedeGenerar: boolean;
 };
 
-export type ActualizarConfiguracion = Omit<ConfiguracionGeneracion, 'id'>;
+export type ActualizarConfiguracion = Pick<
+  ConfiguracionGeneracion,
+  | 'idVersionModelo'
+  | 'nombre'
+  | 'nombreProyecto'
+  | 'idGrupo'
+  | 'idArtefacto'
+  | 'paqueteBase'
+  | 'versionInicial'
+  | 'versionJava'
+  | 'versionSpringBoot'
+  | 'herramientaMigracion'
+  | 'generarRepositorios'
+  | 'generarServicios'
+  | 'generarControladores'
+  | 'generarDtos'
+  | 'exponerRest'
+> & {
+  clases: Array<{
+    idClase: string;
+    seleccionada: boolean;
+    esPersistente: boolean;
+    exponerRest: boolean;
+    nombreTabla: string;
+    nombreEntidad: string;
+    operaciones: Array<{ idOperacion: string; seleccionada: boolean }>;
+  }>;
+  mapeosTipo: MapeoTipo[];
+  dependencias: DependenciaGeneracion[];
+};
 
 export type ResultadoGeneracion = {
   idGeneracion: string;
+  idConfiguracion: string;
+  idVersionModelo: string;
   idArchivoSalida: string;
   nombreArchivo: string;
   totalClases: number;
+  totalOperaciones: number;
   totalArchivosGenerados: number;
 };
 
-/** CU29 — Lee la configuración de generación vigente o defaults. */
-export const leerConfigGeneracion = (modelo: string): Promise<ConfiguracionGeneracion> =>
-  api<ConfiguracionGeneracion>('/modelos/' + modelo + '/generacion/configuracion');
+export const leerConfigGeneracion = (
+  modelo: string,
+  version?: string,
+): Promise<ConfiguracionGeneracion> =>
+  api<ConfiguracionGeneracion>(
+    '/modelos/' +
+      modelo +
+      '/generacion/configuracion' +
+      (version ? '?version=' + encodeURIComponent(version) : ''),
+  );
 
-/** CU29 — Guarda o actualiza la configuración de generación. */
 export const guardarConfigGeneracion = (
   modelo: string,
   cfg: ActualizarConfiguracion,
@@ -38,15 +141,15 @@ export const guardarConfigGeneracion = (
     body: JSON.stringify(cfg),
   });
 
-/** CU30 — Genera el proyecto Spring Boot y devuelve metadatos. */
-export const generarBackend = (modelo: string): Promise<ResultadoGeneracion> =>
+export const generarBackend = (
+  modelo: string,
+  idConfiguracion: string,
+): Promise<ResultadoGeneracion> =>
   api<ResultadoGeneracion>('/modelos/' + modelo + '/generacion/generar', {
     method: 'POST',
+    body: JSON.stringify({ idConfiguracion }),
   });
 
-/**
- * CU32 — Descarga el ZIP del proyecto generado directamente como blob.
- */
 export const descargarArtefacto = async (
   modelo: string,
   idGeneracion: string,

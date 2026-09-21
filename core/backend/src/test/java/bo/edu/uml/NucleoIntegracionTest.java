@@ -27,9 +27,13 @@ import org.springframework.test.web.servlet.*;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 import javax.imageio.ImageIO;
 
@@ -4281,8 +4285,32 @@ class NucleoIntegracionTest {
         var p = proyecto(c);
         String modelo = p.get("idModelo").asText();
         UUID idClase = UUID.randomUUID();
+        UUID idAtributo = UUID.randomUUID();
 
-        enviar(c, modelo, cambio(1, UUID.randomUUID(), clase(idClase, "Usuario")))
+        enviar(
+                        c,
+                        modelo,
+                        cambio(
+                                1,
+                                UUID.randomUUID(),
+                                clase(idClase, "Usuario"),
+                                Map.of(
+                                        "operacion",
+                                        "CREAR",
+                                        "entidad",
+                                        "ATRIBUTO",
+                                        "idEntidad",
+                                        idAtributo,
+                                        "datos",
+                                        Map.of(
+                                                "idClase",
+                                                idClase,
+                                                "nombre",
+                                                "id",
+                                                "tipoUml",
+                                                "UUID",
+                                                "esIdentificador",
+                                                true))))
                 .andExpect(status().isOk());
 
         // 1. Leer configuración por defecto (200 OK)
@@ -4292,42 +4320,68 @@ class NucleoIntegracionTest {
                 .andExpect(jsonPath("$.generarRepositorios").value(true));
 
         // 2. Guardar configuración personalizada
-        mvc.perform(
-                        autorizado(put("/api/modelos/" + modelo + "/generacion/configuracion"), c)
-                                .contentType("application/json")
-                                .content(
-                                        json.writeValueAsString(
-                                                Map.of(
-                                                        "nombre", "Backend Académico",
-                                                        "nombreProyecto", "proyecto-academico",
-                                                        "idGrupo", "bo.edu.uml",
-                                                        "idArtefacto", "proyecto-academico",
-                                                        "paqueteBase", "bo.edu.uml.academico",
-                                                        "versionInicial", "1.0.0-SNAPSHOT",
-                                                        "generarRepositorios", true,
-                                                        "generarControladores", true,
-                                                        "generarDtos", true,
-                                                        "exponerRest", true))))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.idGrupo").value("bo.edu.uml"))
-                .andExpect(jsonPath("$.paqueteBase").value("bo.edu.uml.academico"));
+        var configuracion =
+                respuesta(
+                        mvc.perform(
+                                        autorizado(
+                                                        put(
+                                                                "/api/modelos/"
+                                                                        + modelo
+                                                                        + "/generacion/configuracion"),
+                                                        c)
+                                                .contentType("application/json")
+                                                .content(
+                                                        json.writeValueAsString(
+                                                                Map.of(
+                                                                        "nombre",
+                                                                        "Backend Académico",
+                                                                        "nombreProyecto",
+                                                                        "proyecto-academico",
+                                                                        "idGrupo",
+                                                                        "bo.edu.uml",
+                                                                        "idArtefacto",
+                                                                        "proyecto-academico",
+                                                                        "paqueteBase",
+                                                                        "bo.edu.uml.academico",
+                                                                        "versionInicial",
+                                                                        "1.0.0-SNAPSHOT",
+                                                                        "generarRepositorios",
+                                                                        true,
+                                                                        "generarControladores",
+                                                                        true,
+                                                                        "generarDtos",
+                                                                        true,
+                                                                        "exponerRest",
+                                                                        true))))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.idGrupo").value("bo.edu.uml"))
+                                .andExpect(jsonPath("$.paqueteBase").value("bo.edu.uml.academico"))
+                                .andExpect(jsonPath("$.puedeGenerar").value(false))
+                                .andExpect(jsonPath("$.mapeosTipo").isNotEmpty())
+                                .andExpect(jsonPath("$.dependencias").isNotEmpty()));
+
+        // La configuración no suplanta la validación semántica de la versión.
+        escribir(
+                        c,
+                        post("/api/modelos/" + modelo + "/generacion/generar"),
+                        Map.of("idConfiguracion", configuracion.get("id").asText()))
+                .andExpect(status().isUnprocessableEntity());
+        assertThat(validar(c, modelo).get("estado").asText())
+                .isIn("VALIDO", "VALIDO_CON_ADVERTENCIAS");
 
         // 3. Generar backend Spring Boot en ZIP
         var resGen =
                 respuesta(
-                        mvc.perform(
-                                        autorizado(
-                                                post(
-                                                        "/api/modelos/"
-                                                                + modelo
-                                                                + "/generacion/generar"),
-                                                c))
+                        escribir(
+                                        c,
+                                        post("/api/modelos/" + modelo + "/generacion/generar"),
+                                        Map.of("idConfiguracion", configuracion.get("id").asText()))
                                 .andExpect(status().isOk())
                                 .andExpect(jsonPath("$.idGeneracion").isNotEmpty())
                                 .andExpect(jsonPath("$.idArchivoSalida").isNotEmpty())
                                 .andExpect(
                                         jsonPath("$.nombreArchivo")
-                                                .value("proyecto-academico-generated.zip"))
+                                                .value("proyecto-academico-v2.zip"))
                                 .andExpect(jsonPath("$.totalClases").value(1)));
 
         String idGeneracion = resGen.get("idGeneracion").asText();
@@ -4363,16 +4417,281 @@ class NucleoIntegracionTest {
     }
 
     @Test
+    void generacionAvanzadaCongelaLaVersionYAislaConfiguracionesYArtefactos() throws Exception {
+        var c = login(usuario, clave);
+        String modelo = proyecto(c).get("idModelo").asText();
+        String otroModelo = proyecto(c).get("idModelo").asText();
+        UUID cliente = UUID.randomUUID();
+        UUID descartada = UUID.randomUUID();
+        enviar(
+                        c,
+                        modelo,
+                        cambio(
+                                1,
+                                UUID.randomUUID(),
+                                clase(cliente, "Cliente"),
+                                clase(descartada, "Descartada"),
+                                Map.of(
+                                        "operacion",
+                                        "CREAR",
+                                        "entidad",
+                                        "ATRIBUTO",
+                                        "idEntidad",
+                                        UUID.randomUUID(),
+                                        "datos",
+                                        Map.of(
+                                                "idClase",
+                                                cliente,
+                                                "nombre",
+                                                "id",
+                                                "tipoUml",
+                                                "UUID",
+                                                "esIdentificador",
+                                                true)),
+                                Map.of(
+                                        "operacion",
+                                        "CREAR",
+                                        "entidad",
+                                        "ATRIBUTO",
+                                        "idEntidad",
+                                        UUID.randomUUID(),
+                                        "datos",
+                                        Map.of(
+                                                "idClase", cliente,
+                                                "nombre", "monto",
+                                                "tipoUml", "BigDecimal")),
+                                Map.of(
+                                        "operacion",
+                                        "CREAR",
+                                        "entidad",
+                                        "ATRIBUTO",
+                                        "idEntidad",
+                                        UUID.randomUUID(),
+                                        "datos",
+                                        Map.of(
+                                                "idClase",
+                                                descartada,
+                                                "nombre",
+                                                "id",
+                                                "tipoUml",
+                                                "UUID",
+                                                "esIdentificador",
+                                                true))))
+                .andExpect(status().isOk());
+        assertThat(validar(c, modelo).get("estado").asText())
+                .isIn("VALIDO", "VALIDO_CON_ADVERTENCIAS");
+
+        JsonNode lectura =
+                respuesta(
+                        mvc.perform(
+                                        autorizado(
+                                                get(
+                                                        "/api/modelos/"
+                                                                + modelo
+                                                                + "/generacion/configuracion"),
+                                                c))
+                                .andExpect(status().isOk()));
+        String version = lectura.get("idVersionModelo").asText();
+        mvc.perform(
+                        autorizado(
+                                get("/api/modelos/" + otroModelo + "/generacion/configuracion")
+                                        .param("version", version),
+                                c))
+                .andExpect(status().isNotFound());
+
+        Map<String, Object> configuracion = new LinkedHashMap<>();
+        configuracion.put("idVersionModelo", version);
+        configuracion.put("nombre", "Configuración histórica selectiva");
+        configuracion.put("nombreProyecto", "backend-selectivo");
+        configuracion.put("idGrupo", "bo.edu.uml");
+        configuracion.put("idArtefacto", "backend-selectivo");
+        configuracion.put("paqueteBase", "bo.edu.uml.selectivo");
+        configuracion.put("versionInicial", "1.0.0");
+        configuracion.put("versionJava", "21");
+        configuracion.put("versionSpringBoot", "3.5.16");
+        configuracion.put("herramientaMigracion", "NINGUNO");
+        configuracion.put("generarRepositorios", true);
+        configuracion.put("generarServicios", true);
+        configuracion.put("generarControladores", false);
+        configuracion.put("generarDtos", false);
+        configuracion.put("exponerRest", false);
+        configuracion.put(
+                "clases",
+                List.of(
+                        Map.of(
+                                "idClase",
+                                cliente,
+                                "seleccionada",
+                                true,
+                                "esPersistente",
+                                true,
+                                "exponerRest",
+                                false,
+                                "nombreTabla",
+                                "clientes_generados",
+                                "nombreEntidad",
+                                "ClienteGenerado",
+                                "operaciones",
+                                List.of()),
+                        Map.of(
+                                "idClase",
+                                descartada,
+                                "seleccionada",
+                                false,
+                                "esPersistente",
+                                true,
+                                "exponerRest",
+                                false,
+                                "nombreTabla",
+                                "descartada",
+                                "nombreEntidad",
+                                "Descartada",
+                                "operaciones",
+                                List.of())));
+        configuracion.put(
+                "mapeosTipo",
+                List.of(
+                        Map.of(
+                                "tipoUml", "BigDecimal",
+                                "tipoJava", "java.math.BigDecimal",
+                                "tipoPostgresql", "NUMERIC(19,2)")));
+        configuracion.put(
+                "dependencias",
+                List.of(
+                        Map.of(
+                                "idGrupo", "org.example",
+                                "idArtefacto", "biblioteca-extra",
+                                "version", "1.2.3",
+                                "ambito", "COMPILACION",
+                                "obligatoria", false)));
+        var guardada =
+                respuesta(
+                        escribir(
+                                        c,
+                                        put("/api/modelos/" + modelo + "/generacion/configuracion"),
+                                        configuracion)
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.puedeGenerar").value(true))
+                                .andExpect(
+                                        jsonPath("$.clases[*].nombreEntidad")
+                                                .value(Matchers.hasItem("ClienteGenerado"))));
+        String idConfig = guardada.get("id").asText();
+        escribir(c, put("/api/modelos/" + otroModelo + "/generacion/configuracion"), configuracion)
+                .andExpect(status().isNotFound());
+        escribir(
+                        c,
+                        post("/api/modelos/" + otroModelo + "/generacion/generar"),
+                        Map.of("idConfiguracion", idConfig))
+                .andExpect(status().isNotFound());
+        mvc.perform(
+                        post("/api/modelos/" + modelo + "/generacion/generar")
+                                .cookie(c.sesion())
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of("idConfiguracion", idConfig))))
+                .andExpect(status().isForbidden());
+
+        // Una edición posterior no cambia la instantánea de la configuración guardada.
+        enviar(c, modelo, cambio(2, UUID.randomUUID(), clase(UUID.randomUUID(), "Posterior")))
+                .andExpect(status().isOk());
+        var generada =
+                respuesta(
+                        escribir(
+                                        c,
+                                        post("/api/modelos/" + modelo + "/generacion/generar"),
+                                        Map.of("idConfiguracion", idConfig))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.idVersionModelo").value(version))
+                                .andExpect(jsonPath("$.totalClases").value(1)));
+        String idGeneracion = generada.get("idGeneracion").asText();
+        mvc.perform(
+                        autorizado(
+                                get(
+                                        "/api/modelos/"
+                                                + otroModelo
+                                                + "/generacion/"
+                                                + idGeneracion
+                                                + "/descargar"),
+                                c))
+                .andExpect(status().isNotFound());
+        byte[] zip =
+                mvc.perform(
+                                autorizado(
+                                        get(
+                                                "/api/modelos/"
+                                                        + modelo
+                                                        + "/generacion/"
+                                                        + idGeneracion
+                                                        + "/descargar"),
+                                        c))
+                        .andExpect(status().isOk())
+                        .andReturn()
+                        .getResponse()
+                        .getContentAsByteArray();
+        Map<String, String> archivos = new HashMap<>();
+        try (ZipInputStream entrada = new ZipInputStream(new ByteArrayInputStream(zip))) {
+            ZipEntry archivo;
+            while ((archivo = entrada.getNextEntry()) != null)
+                archivos.put(
+                        archivo.getName(),
+                        new String(entrada.readAllBytes(), StandardCharsets.UTF_8));
+        }
+        String ruta = "backend-selectivo/src/main/java/bo/edu/uml/selectivo/";
+        assertThat(archivos)
+                .containsKeys(
+                        ruta + "modelo/ClienteGenerado.java",
+                        ruta + "repositorio/ClienteGeneradoRepositorio.java",
+                        ruta + "servicio/ClienteGeneradoServicio.java");
+        assertThat(archivos.keySet())
+                .noneMatch(
+                        nombre ->
+                                nombre.contains("Descartada")
+                                        || nombre.contains("Posterior")
+                                        || nombre.contains("Controlador.java")
+                                        || nombre.contains("Dto.java"));
+        assertThat(archivos.get(ruta + "modelo/ClienteGenerado.java"))
+                .contains("clientes_generados", "BigDecimal");
+        assertThat(archivos.get("backend-selectivo/src/main/resources/schema.sql"))
+                .contains("clientes_generados", "NUMERIC(19,2)");
+        assertThat(archivos.get("backend-selectivo/pom.xml"))
+                .contains("biblioteca-extra", "<version>1.2.3</version>");
+    }
+
+    @Test
     void interoperabilidadAutorizaRolesRealesSinDependerDelSuperadministrador() throws Exception {
         var administrador = login(usuario, clave);
         var proyecto = proyecto(administrador);
         UUID idProyecto = UUID.fromString(proyecto.get("id").asText());
         String modelo = proyecto.get("idModelo").asText();
+        UUID claseInteroperable = UUID.randomUUID();
         enviar(
                         administrador,
                         modelo,
-                        cambio(1, UUID.randomUUID(), clase(UUID.randomUUID(), "Interoperable")))
+                        cambio(
+                                1,
+                                UUID.randomUUID(),
+                                clase(claseInteroperable, "Interoperable"),
+                                Map.of(
+                                        "operacion",
+                                        "CREAR",
+                                        "entidad",
+                                        "ATRIBUTO",
+                                        "idEntidad",
+                                        UUID.randomUUID(),
+                                        "datos",
+                                        Map.of(
+                                                "idClase",
+                                                claseInteroperable,
+                                                "nombre",
+                                                "id",
+                                                "tipoUml",
+                                                "UUID",
+                                                "esIdentificador",
+                                                true))))
                 .andExpect(status().isOk());
+        assertThat(validar(administrador, modelo).get("estado").asText())
+                .isIn("VALIDO", "VALIDO_CON_ADVERTENCIAS");
 
         String editorNombre = "xmi_editor_" + UUID.randomUUID().toString().substring(0, 8);
         UUID editorId = fixture(editorNombre);
@@ -4419,6 +4738,26 @@ class NucleoIntegracionTest {
                                 propietario))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.paqueteBase").value("com.empresa.modelodeclases"));
+        mvc.perform(
+                        autorizado(
+                                        put("/api/modelos/" + modelo + "/generacion/configuracion"),
+                                        propietario)
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of(
+                                                        "nombre", "Backend del propietario",
+                                                        "nombreProyecto", "modelo-de-clases",
+                                                        "idGrupo", "com.empresa",
+                                                        "idArtefacto", "modelo-de-clases",
+                                                        "paqueteBase", "com.empresa.modelodeclases",
+                                                        "versionInicial", "1.0.0-SNAPSHOT",
+                                                        "generarRepositorios", true,
+                                                        "generarControladores", true,
+                                                        "generarDtos", true,
+                                                        "exponerRest", true))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.puedeGenerar").value(true));
         mvc.perform(autorizado(post("/api/modelos/" + modelo + "/generacion/generar"), propietario))
                 .andExpect(status().isOk());
 
