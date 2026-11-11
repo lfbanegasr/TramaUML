@@ -115,6 +115,7 @@ export function PanelAsistenteIa({
   const [contextoClase, setContextoClase] = useState<string | null>(claseSeleccionada ?? null);
 
   const listaRef = useRef<HTMLDivElement | null>(null);
+  const seguirFinalRef = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const reconocimientoRef = useRef<any>(null);
   const grabadorRef = useRef<MediaRecorder | null>(null);
@@ -390,12 +391,16 @@ export function PanelAsistenteIa({
     }
   }, [claseSeleccionada]);
 
-  // Scroll al final al agregar mensajes
+  // Sigue el final solo si el usuario ya estaba allí. Leer mensajes anteriores
+  // nunca debe ser interrumpido por el sondeo del chat compartido.
   useEffect(() => {
-    if (listaRef.current) {
-      listaRef.current.scrollTop = listaRef.current.scrollHeight;
-    }
-  }, [mensajes, enviando]);
+    const lista = listaRef.current;
+    if (!lista || !seguirFinalRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      lista.scrollTop = lista.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [mensajes.length, enviando]);
 
   // Si cambia la propuesta pendiente exterior
   useEffect(() => {
@@ -504,6 +509,7 @@ export function PanelAsistenteIa({
     }
     const textoBase = (textoAEnviar ?? prompt).trim();
     if (!textoBase || enviando || disabled) return;
+    seguirFinalRef.current = true;
 
     // Enriquecer el prompt si hay una clase en contexto y no se especificó clase en el texto
     let texto = textoBase;
@@ -721,7 +727,15 @@ export function PanelAsistenteIa({
       </div>
 
       {/* Lista de Mensajes del Chat */}
-      <div className="ia-agent-messages" ref={listaRef}>
+      <div
+        className="ia-agent-messages"
+        ref={listaRef}
+        onScroll={(evento) => {
+          const lista = evento.currentTarget;
+          seguirFinalRef.current =
+            lista.scrollHeight - lista.scrollTop - lista.clientHeight <= 72;
+        }}
+      >
         {errorChat && <p role="alert">No se pudo sincronizar el chat: {errorChat}</p>}
         {acuerdos.length > 0 && <details className="ia-chat-bubble asistente">
           <summary>Acuerdos del equipo ({acuerdos.filter(a => a.vigente).length} vigentes)</summary>
@@ -758,7 +772,9 @@ export function PanelAsistenteIa({
           <div key={m.id} className={`ia-chat-bubble-wrapper ${m.emisor.toLowerCase()}`}>
             <div className="ia-chat-meta">
               <span className="ia-chat-author">
-                {m.autor ?? (m.emisor === 'ASISTENTE' ? '✦ Agente IA' : 'Tú')}
+                {m.emisor === 'USUARIO' ? (
+                  <>Consulta de <strong>{m.autor ?? 'Integrante'}</strong></>
+                ) : '✦ Agente IA'}
                 {m.emisor === 'ASISTENTE' && m.respuestaANombre && (
                   <small style={{ marginLeft: '6px', opacity: 0.78, fontWeight: 400 }}>
                     ↪ para {m.respuestaANombre}

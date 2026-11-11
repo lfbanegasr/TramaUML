@@ -8,7 +8,7 @@ services:
     dockerfilePath: ./despliegue/2026-11-11_render.Dockerfile
     dockerContext: .
     healthCheckPath: /salud
-    autoDeployTrigger: off
+    autoDeployTrigger: commit
     envVars:
       - key: SPRING_PROFILES_ACTIVE
         value: despliegue
