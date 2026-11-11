@@ -29,4 +29,4 @@ services:
       - key: UML_IA_MODELO_TRANSCRIPCION
         value: gemini-2.5-flash
       - key: UML_SERVICIOS_MASTER_KEY
-        sync: false
+        generateValue: true
