@@ -34,7 +34,7 @@ import org.springframework.web.multipart.MultipartFile;
 public class IaServicio {
   private static final Logger LOG = LoggerFactory.getLogger(IaServicio.class);
   private static final long MAX_AUDIO = 15L * 1024 * 1024;
-  private static final long MAX_IMAGEN = 10L * 1024 * 1024;
+  private static final long MAX_IMAGEN = 16L * 1024 * 1024;
   private static final int MAX_DURACION_AUDIO_SEGUNDOS = 120;
 
   private final IaRepositorio repo;

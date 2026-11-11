@@ -23,9 +23,9 @@ services:
       - key: UML_IA_CONTEXTO_REMOTO
         value: "true"
       - key: UML_IA_MODELO_TEXTO
-        value: gemini-2.5-flash
+        value: gemini-3.8-flash
       - key: UML_IA_MODELO_VISION
-        value: gemini-2.5-flash
+        value: gemini-3.8-flash
       - key: UML_IA_MODELO_TRANSCRIPCION
         value: gemini-2.5-flash
       - key: UML_SERVICIOS_MASTER_KEY

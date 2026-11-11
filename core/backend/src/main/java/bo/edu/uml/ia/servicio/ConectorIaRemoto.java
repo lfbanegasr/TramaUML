@@ -501,10 +501,9 @@ public class ConectorIaRemoto implements ProveedorIa {
 
   private static final List<String> MODELOS_GEMINI_RESPALDO =
       List.of(
+          "gemini-3.8-flash",
+          "gemini-3.6-flash",
           "gemini-2.5-flash",
-          "gemini-2.5-flash-lite",
-          "gemini-2.0-flash",
-          "gemini-3.1-flash-lite-preview",
           "gemini-3.1-flash-lite");
 
   private JsonNode enviarGeminiConRespaldo(
@@ -556,15 +555,14 @@ public class ConectorIaRemoto implements ProveedorIa {
     if (respuesta == null) return null;
     if (es(configuracion, "OPENAI"))
       return respuesta.path("choices").path(0).path("message").path("content").asText(null);
-    if (es(configuracion, "GEMINI"))
-      return respuesta
-          .path("candidates")
-          .path(0)
-          .path("content")
-          .path("parts")
-          .path(0)
-          .path("text")
-          .asText(null);
+    if (es(configuracion, "GEMINI")) {
+      StringBuilder texto = new StringBuilder();
+      for (JsonNode parte : respuesta.path("candidates").path(0).path("content").path("parts")) {
+        if (!parte.path("thought").asBoolean(false) && parte.hasNonNull("text"))
+          texto.append(parte.path("text").asText());
+      }
+      return texto.isEmpty() ? null : texto.toString();
+    }
     if (es(configuracion, "OLLAMA")) return respuesta.path("response").asText(null);
     return null;
   }
@@ -623,9 +621,8 @@ public class ConectorIaRemoto implements ProveedorIa {
       if (modelo.isBlank()
           || modelo.contains("1.5")
           || modelo.contains("1.0")
-          || "gemini-pro".equalsIgnoreCase(modelo)
-          || "gemini-3.1-flash-lite".equalsIgnoreCase(modelo)) {
-        modelo = "gemini-2.5-flash";
+          || "gemini-pro".equalsIgnoreCase(modelo)) {
+        modelo = "gemini-3.8-flash";
       }
       String url =
           base.url().isBlank()

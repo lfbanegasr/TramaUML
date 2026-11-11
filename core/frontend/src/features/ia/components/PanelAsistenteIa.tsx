@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, type FormEvent, type KeyboardEvent } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, type FormEvent, type KeyboardEvent } from 'react';
 import {
   enviarMensajeAgente, enviarVozAgente, leerConversacion, leerCapacidadesAgente, confirmarAcuerdo, cancelarEjecucion,
   type MensajeAgente, type AcuerdoAgente, type EjecucionAgente,
@@ -115,7 +115,13 @@ export function PanelAsistenteIa({
   const [contextoClase, setContextoClase] = useState<string | null>(claseSeleccionada ?? null);
 
   const listaRef = useRef<HTMLDivElement | null>(null);
-  const seguirFinalRef = useRef(true);
+  const posicionAntesDeSincronizar = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (listaRef.current && posicionAntesDeSincronizar.current !== null) {
+      listaRef.current.scrollTop = posicionAntesDeSincronizar.current;
+      posicionAntesDeSincronizar.current = null;
+    }
+  }, [mensajes, acuerdos, ejecuciones]);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const reconocimientoRef = useRef<any>(null);
   const grabadorRef = useRef<MediaRecorder | null>(null);
@@ -147,13 +153,14 @@ export function PanelAsistenteIa({
           pagina.mensajes.forEach(m => entradasChat.current.set(m.id, m));
           cursorChat.current = pagina.cursor;
         } while (pagina.hayMas);
-        setAcuerdos(pagina.acuerdos); setEjecuciones(pagina.ejecuciones);
         const anteriores = Array.from(entradasChat.current.values());
         const propuestas = new Map<string, PropuestaIa>();
         await Promise.all(anteriores.filter(m => m.idPropuesta).slice(-20).map(async m => {
           propuestas.set(m.idPropuesta!, await leerPropuesta(modelo, m.idPropuesta!));
         }));
         if (!vigente) return;
+        posicionAntesDeSincronizar.current = listaRef.current?.scrollTop ?? null;
+        setAcuerdos(pagina.acuerdos); setEjecuciones(pagina.ejecuciones);
         setMensajes(prev => {
           const porId = new Map(prev.map(m => [m.id, m]));
           const nuevos = anteriores.map(m => {
@@ -391,17 +398,6 @@ export function PanelAsistenteIa({
     }
   }, [claseSeleccionada]);
 
-  // Sigue el final solo si el usuario ya estaba allí. Leer mensajes anteriores
-  // nunca debe ser interrumpido por el sondeo del chat compartido.
-  useEffect(() => {
-    const lista = listaRef.current;
-    if (!lista || !seguirFinalRef.current) return;
-    const frame = window.requestAnimationFrame(() => {
-      lista.scrollTop = lista.scrollHeight;
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [mensajes.length, enviando]);
-
   // Si cambia la propuesta pendiente exterior
   useEffect(() => {
     if (propuestaPendiente) {
@@ -509,7 +505,6 @@ export function PanelAsistenteIa({
     }
     const textoBase = (textoAEnviar ?? prompt).trim();
     if (!textoBase || enviando || disabled) return;
-    seguirFinalRef.current = true;
 
     // Enriquecer el prompt si hay una clase en contexto y no se especificó clase en el texto
     let texto = textoBase;
@@ -575,7 +570,7 @@ export function PanelAsistenteIa({
       ]);
     } finally {
       setEnviando(false);
-      setTimeout(() => inputRef.current?.focus(), 50);
+      setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 50);
     }
   }
 
@@ -729,12 +724,8 @@ export function PanelAsistenteIa({
       {/* Lista de Mensajes del Chat */}
       <div
         className="ia-agent-messages"
+        style={{ overflowAnchor: 'none', minHeight: 0 }}
         ref={listaRef}
-        onScroll={(evento) => {
-          const lista = evento.currentTarget;
-          seguirFinalRef.current =
-            lista.scrollHeight - lista.scrollTop - lista.clientHeight <= 72;
-        }}
       >
         {errorChat && <p role="alert">No se pudo sincronizar el chat: {errorChat}</p>}
         {acuerdos.length > 0 && <details className="ia-chat-bubble asistente">
@@ -1053,6 +1044,11 @@ export function PanelAsistenteIa({
           </div>
         )}
       </div>
+
+      <button type="button" onClick={() => {
+        const lista = listaRef.current;
+        if (lista) lista.scrollTop = lista.scrollHeight;
+      }}>↓ Ver últimos mensajes</button>
 
       {/* Menú flotante de ideas desplegable (opcional bajo demanda, no ocupa espacio fijo) */}
       {verIdeas && (

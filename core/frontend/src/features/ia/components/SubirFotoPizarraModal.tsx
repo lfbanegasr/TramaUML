@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { solicitarImagen } from '../api/iaApi';
 
 const TIPOS = ['image/png', 'image/jpeg'];
-const LIMITE = 10 * 1024 * 1024;
 
 export type TipoOrigenImagen = 'AUTO' | 'PAPEL' | 'PIZARRA' | 'DIGITAL';
 
@@ -39,10 +38,6 @@ export function SubirFotoPizarraModal({
     if (!nuevo) return;
     if (!TIPOS.includes(nuevo.type)) {
       setError('Selecciona una imagen PNG o JPG.');
-      return;
-    }
-    if (nuevo.size > LIMITE) {
-      setError('La imagen supera el límite de 10 MB.');
       return;
     }
     if (vista) URL.revokeObjectURL(vista);
@@ -82,7 +77,7 @@ export function SubirFotoPizarraModal({
         const origH = swap ? img.width : img.height;
 
         // Limitar dimensiones máximas a 1400px para que el envío y el análisis en IA sea ultra rápido (pasa de varios MB a ~200 KB)
-        const MAX_DIM = 1400;
+        const MAX_DIM = 2560;
         let scale = 1;
         if (origW > MAX_DIM || origH > MAX_DIM) {
           scale = Math.min(MAX_DIM / origW, MAX_DIM / origH);
@@ -305,7 +300,7 @@ export function SubirFotoPizarraModal({
             ) : (
               <span className="ia-dropzone-empty">
                 <b>Arrastra un boceto en papel, foto de pizarra o diagrama aquí</b>
-                <small>o haz clic para seleccionar · PNG/JPG · máx. 10 MB</small>
+                <small>o haz clic para seleccionar · PNG/JPG · optimización automática de fotos</small>
               </span>
             )}
           </button>

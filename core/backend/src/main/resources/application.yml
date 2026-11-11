@@ -1,4 +1,8 @@
 spring:
+  servlet:
+    multipart:
+      max-file-size: 16MB
+      max-request-size: 18MB
   application:
     name: plataforma-uml
   datasource:
@@ -40,9 +44,9 @@ uml:
     url-texto: ${UML_IA_URL_TEXTO:}
     url-vision: ${UML_IA_URL_VISION:}
     url-transcripcion: ${UML_IA_URL_TRANSCRIPCION:}
-    modelo-texto: ${UML_IA_MODELO_TEXTO:gemini-3.1-flash-lite}
-    modelo-vision: ${UML_IA_MODELO_VISION:gemini-3.1-flash-lite}
-    modelo-transcripcion: ${UML_IA_MODELO_TRANSCRIPCION:gemini-3.1-flash-lite}
+    modelo-texto: ${UML_IA_MODELO_TEXTO:gemini-3.8-flash}
+    modelo-vision: ${UML_IA_MODELO_VISION:gemini-3.8-flash}
+    modelo-transcripcion: ${UML_IA_MODELO_TRANSCRIPCION:gemini-2.5-flash}
   bootstrap:
     enabled: ${UML_BOOTSTRAP_ENABLED:false}
     nombre-usuario: ${UML_ADMIN_USERNAME:}
