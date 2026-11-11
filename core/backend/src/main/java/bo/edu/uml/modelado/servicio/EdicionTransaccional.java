@@ -1,0 +1,162 @@
+package bo.edu.uml.modelado.servicio;
+
+import bo.edu.uml.acceso.modelo.Identidad;
+import bo.edu.uml.colaboracion.servicio.ColaboracionServicio;
+import bo.edu.uml.compartido.ApiException;
+import bo.edu.uml.modelado.dto.ModeladoDto.*;
+import bo.edu.uml.modelado.repositorio.*;
+import bo.edu.uml.proyectos.repositorio.ActividadRepositorio;
+import java.util.*;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.*;
+
+@Service
+public class EdicionTransaccional {
+  private final ModeloRepositorio modelos;
+  private final ElementoRepositorio elementos;
+  private final ApplicationEventPublisher eventos;
+  private final ActividadElementoRepositorio valores;
+  private final ActividadRepositorio actividad;
+  private final ColaboracionServicio colaboracion;
+
+  public EdicionTransaccional(
+      ModeloRepositorio modelos,
+      ElementoRepositorio elementos,
+      ApplicationEventPublisher eventos,
+      ActividadElementoRepositorio valores,
+      ActividadRepositorio actividad,
+      ColaboracionServicio colaboracion) {
+    this.modelos = modelos;
+    this.elementos = elementos;
+    this.eventos = eventos;
+    this.valores = valores;
+    this.actividad = actividad;
+    this.colaboracion = colaboracion;
+  }
+
+  public record ModeloConfirmado(
+      UUID modelo, UUID sesion, UUID cambio, UUID actor, long revision, UUID version) {}
+
+  @Transactional
+  public Confirmacion aplicar(Identidad actor, UUID modelo, Cambio cambio, String parche) {
+    return aplicarInterno(actor, modelo, cambio, parche, "Edición manual");
+  }
+
+  @Transactional
+  public Confirmacion aplicarPropuestaIa(
+      Identidad actor, UUID modelo, Cambio cambio, String parche, UUID propuesta) {
+    return aplicarInterno(
+        actor,
+        modelo,
+        cambio,
+        parche,
+        "Asistente IA; propuesta " + propuesta + "; aprobado por " + actor.id());
+  }
+
+  private Confirmacion aplicarInterno(
+      Identidad actor, UUID modelo, Cambio cambio, String parche, String origen) {
+    autorizar(actor, modelo, "EDITAR_MODELO", false);
+    var previo =
+        modelos.repeticion(
+            modelo,
+            cambio.idSesionEdicion(),
+            cambio.idCambioCliente(),
+            actor.id(),
+            cambio.revisionBase(),
+            parche);
+    if (previo.isPresent()) return previo.get();
+    colaboracion.validarCambio(actor, modelo, cambio.idSesionEdicion());
+    long revision = modelos.iniciar(modelo, cambio.revisionBase(), actor.id());
+    UUID proyecto = modelos.cabecera(modelo).proyecto();
+    record Registro(Accion accion, String anterior, String posterior) {}
+    List<Registro> registros = new ArrayList<>();
+    for (Accion a : cambio.acciones()) {
+      modelos.exigirOrganizacion(actor.id(), modelo, a);
+      String anterior = valores.valores(modelo, a);
+      elementos.aplicar(modelo, actor.id(), a);
+      registros.add(new Registro(a, anterior, valores.valores(modelo, a)));
+    }
+    Accion primera = cambio.acciones().getFirst();
+    modelos.registrar(
+        modelo,
+        cambio.idSesionEdicion(),
+        cambio.idCambioCliente(),
+        actor.id(),
+        cambio.revisionBase(),
+        revision,
+        primera.operacion(),
+        cambio.acciones().size() == 1 ? primera.entidad() : "MODELO_UML",
+        cambio.acciones().size() == 1 ? primera.idEntidad() : modelo,
+        parche);
+    // JDBC ejecuta inmediatamente; no existen escrituras JPA pendientes de flush.
+    UUID version =
+        modelos.guardar(
+            modelo,
+            revision,
+            actor.id(),
+            origen + ": " + cambio.acciones().size() + " operación(es)");
+    colaboracion.confirmarActividad(cambio.idSesionEdicion());
+    for (int i = 0; i < registros.size(); i++) {
+      var r = registros.get(i);
+      actividad.registrar(
+          proyecto,
+          actor.id(),
+          "MODELADO",
+          r.accion().operacion(),
+          r.accion().entidad(),
+          r.accion().idEntidad(),
+          modelo,
+          version,
+          r.anterior(),
+          r.posterior(),
+          actividad.escribir(
+              Map.of(
+                  "idCambioCliente",
+                  cambio.idCambioCliente(),
+                  "idSesionEdicion",
+                  cambio.idSesionEdicion(),
+                  "indiceAccion",
+                  i,
+                  "revisionBase",
+                  cambio.revisionBase(),
+                  "revisionAplicada",
+                  revision)));
+    }
+    eventos.publishEvent(
+        new ModeloConfirmado(
+            modelo,
+            cambio.idSesionEdicion(),
+            cambio.idCambioCliente(),
+            actor.id(),
+            revision,
+            version));
+    return new Confirmacion(cambio.idCambioCliente(), revision, version, false);
+  }
+
+  @Transactional(readOnly = true, propagation = Propagation.REQUIRES_NEW)
+  public Optional<Confirmacion> recuperarReenvio(
+      Identidad actor, UUID modelo, Cambio cambio, String parche) {
+    autorizar(actor, modelo, "EDITAR_MODELO", false);
+    return modelos.repeticion(
+        modelo,
+        cambio.idSesionEdicion(),
+        cambio.idCambioCliente(),
+        actor.id(),
+        cambio.revisionBase(),
+        parche);
+  }
+
+  @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+  public Modelo leer(Identidad actor, UUID id) {
+    autorizar(actor, id, "VER_MODELO", true);
+    return modelos.leer(modelos.cabecera(id), actor);
+  }
+
+  private void autorizar(Identidad actor, UUID id, String permiso, boolean lectura) {
+    var c = modelos.cabecera(id);
+    if (!(lectura && actor.esAdministrador())
+        && !modelos.permiso(actor.id(), c.proyecto(), permiso))
+      throw new ApiException(404, "Modelo no disponible.");
+  }
+}

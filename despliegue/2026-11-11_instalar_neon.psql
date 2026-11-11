@@ -1,0 +1,25 @@
+\set ON_ERROR_STOP on
+-- Solo para una base NUEVA y vacía, conectado como propietario de Neon.
+-- No carga usuarios, proyectos, conversaciones ni credenciales locales.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname='uml_colaborativo') THEN
+    RAISE EXCEPTION 'La base ya contiene uml_colaborativo; no se sobrescribe. Use otra base vacía.';
+  END IF;
+END $$;
+\ir ../database/2026-09-12_00_cuenta_aplicacion.sql
+\ir ../database/2026-09-12_16_esquema_espanol.sql
+\ir ../database/2026-09-12_17_catalogos_espanol.sql
+\ir ../database/2026-09-13_18_correcciones_desarrollo.sql
+\ir ../core/docs/migraciones/2026-09-14_01_revocacion_permisos_rol.sql
+\ir ../core/docs/migraciones/2026-09-15_02_resolucion_conflictos.sql
+\ir ../core/docs/migraciones/2026-09-15_03_historial_permisos.sql
+\ir ../core/docs/migraciones/2026-09-18_04_xmi_generacion_permisos.sql
+\ir ../core/docs/migraciones/2026-09-19_05_asistencia_inteligente_permisos.sql
+\ir ../core/docs/migraciones/2026-09-20_06_servicios_plataforma_seguridad.sql
+\ir ../core/docs/migraciones/2026-09-20_07_revision_asistencia_lectura.sql
+\ir ../core/docs/migraciones/2026-09-21_08_generacion_backend_avanzada.sql
+\ir ../core/docs/migraciones/2026-09-21_09_validacion_backend.sql
+\ir ../core/docs/migraciones/2026-11-10_10_subconjunto_uml_251.sql
+\ir ../core/docs/migraciones/2026-11-10_11_agente_colaborativo.sql
+ALTER ROLE uml_app LOGIN;
+\echo 'Esquema instalado. Asigne una clave exclusiva con: \password uml_app'

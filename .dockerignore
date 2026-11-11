@@ -1,0 +1,14 @@
+**/node_modules
+**/dist
+**/target
+**/.git
+**/.qa
+**/.salida
+**/.env
+**/.env.*
+**/*.env
+**/*.log
+**/*.zip
+**/*.docx
+mobile
+enterprise

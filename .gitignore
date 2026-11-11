@@ -1,0 +1,9 @@
+﻿.env
+.env.*
+*.env
+**/target/
+**/node_modules/
+**/dist/
+.qa/
+.salida/
+*.log
