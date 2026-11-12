@@ -134,6 +134,8 @@ export const verificarServicio = (id: string) =>
     method: 'POST',
     body: '{}',
   });
+export const activarImagenesGemini = () =>
+  api<ServicioPlataforma>('/administracion/servicios/imagenes-gemini/activar', { method: 'POST' });
 export const cambiarEstadoServicio = (
   servicio: ServicioPlataforma,
   estado: 'ACTIVO' | 'INACTIVO',

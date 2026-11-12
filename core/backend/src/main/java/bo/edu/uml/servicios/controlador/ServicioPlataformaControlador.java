@@ -4,6 +4,7 @@ import static bo.edu.uml.servicios.dto.ServicioPlataformaDto.*;
 
 import bo.edu.uml.acceso.modelo.Identidad;
 import bo.edu.uml.servicios.servicio.ServicioPlataformaServicio;
+import bo.edu.uml.servicios.servicio.ActivarImagenesGeminiServicio;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
@@ -20,9 +21,17 @@ import java.util.UUID;
 @RequestMapping("/api/administracion/servicios")
 public class ServicioPlataformaControlador {
     private final ServicioPlataformaServicio servicio;
+    private final ActivarImagenesGeminiServicio imagenes;
 
-    public ServicioPlataformaControlador(ServicioPlataformaServicio servicio) {
+    public ServicioPlataformaControlador(ServicioPlataformaServicio servicio,
+            ActivarImagenesGeminiServicio imagenes) {
         this.servicio = servicio;
+        this.imagenes = imagenes;
+    }
+
+    @PostMapping("/imagenes-gemini/activar")
+    Servicio activarImagenes(@AuthenticationPrincipal Identidad actor) {
+        return imagenes.activar(actor);
     }
 
     @GetMapping

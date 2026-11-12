@@ -1,6 +1,7 @@
 package bo.edu.uml.ia.servicio;
 
 import bo.edu.uml.servicios.servicio.ResolverServicioActivo;
+import bo.edu.uml.compartido.ApiException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -23,8 +24,8 @@ import org.springframework.web.client.RestClientException;
  */
 @Service
 public class ConectorIaRemoto implements ProveedorIa {
-  private final java.util.concurrent.atomic.AtomicLong pausaHasta =
-      new java.util.concurrent.atomic.AtomicLong();
+  private final java.util.concurrent.ConcurrentHashMap<String, Long> pausasHasta =
+      new java.util.concurrent.ConcurrentHashMap<>();
   private static final Logger LOG = LoggerFactory.getLogger(ConectorIaRemoto.class);
   private static final String REGLAS_UML =
       "Subconjunto de clases UML 2.5.1: no inventes interfaces, realización, clases de"
@@ -367,7 +368,8 @@ public class ConectorIaRemoto implements ProveedorIa {
   public Optional<String> reconocerDiagrama(
       byte[] imagen, String tipoContenido, String guiaOInstruccion) {
     var configuracion = configuracion("IA_IMAGEN", urlVision, modeloVision);
-    if (!configurado(configuracion)) return Optional.empty();
+    if (!configurado(configuracion)) throw new ApiException(503,
+        "El análisis de imágenes no está configurado. Un administrador puede habilitarlo en Administración → Servicios → Habilitar imágenes con Gemini.");
     String prompt = LEER_DIAGRAMA;
     if (guiaOInstruccion != null && !guiaOInstruccion.isBlank()) {
       prompt =
@@ -384,7 +386,11 @@ public class ConectorIaRemoto implements ProveedorIa {
       String tipoContenido,
       byte[] contenido,
       String capacidad) {
-    if (System.currentTimeMillis() < pausaHasta.get()) return Optional.empty();
+    if (System.currentTimeMillis() < pausasHasta.getOrDefault(capacidad, 0L)) {
+      if ("visión".equals(capacidad)) throw new ApiException(429,
+          "Gemini agotó temporalmente su cuota de imágenes. Espera un minuto y vuelve a intentar; la foto se conserva.");
+      return Optional.empty();
+    }
     try {
       JsonNode respuesta;
       if (es(configuracion, "OPENAI"))
@@ -405,16 +411,27 @@ public class ConectorIaRemoto implements ProveedorIa {
         respuesta =
             enviarJson(configuracion, solicitudOllama(configuracion.modelo(), prompt, contenido));
       else return Optional.empty();
-      return limpiar(textoRespuesta(configuracion, respuesta));
+      var resultado = limpiar(textoRespuesta(configuracion, respuesta));
+      if ("visión".equals(capacidad) && resultado.isEmpty()) throw new ApiException(502,
+          "El proveedor recibió la imagen pero no devolvió un análisis utilizable. Intenta una foto más clara.");
+      return resultado;
     } catch (RestClientException | IllegalArgumentException e) {
       if (e instanceof org.springframework.web.client.HttpClientErrorException.TooManyRequests)
-        pausaHasta.set(System.currentTimeMillis() + 60000);
+        pausasHasta.put(capacidad, System.currentTimeMillis() + 60000);
       LOG.warn(
           "Proveedor IA {} no disponible para {}: {} - {}",
           configuracion.proveedor(),
           capacidad,
           e.getClass().getSimpleName(),
           "respuesta omitida para proteger credenciales y contexto");
+      if ("visión".equals(capacidad)) {
+        if (e instanceof org.springframework.web.client.HttpClientErrorException.TooManyRequests)
+          throw new ApiException(429, "Gemini agotó la cuota disponible para analizar imágenes. Revisa los límites de la API key en Google AI Studio; no se aplicaron cambios.");
+        if (e instanceof org.springframework.web.client.HttpClientErrorException fallo
+            && (fallo.getStatusCode().value() == 401 || fallo.getStatusCode().value() == 403))
+          throw new ApiException(503, "Google rechazó la clave de Gemini o el acceso al modelo de imágenes. Revisa el servicio en Administración → Servicios.");
+        throw new ApiException(503, "El proveedor de imágenes no pudo completar el análisis. Comprueba su conexión en Administración → Servicios y vuelve a intentar.");
+      }
       return Optional.empty();
     }
   }

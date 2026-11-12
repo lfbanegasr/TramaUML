@@ -74,6 +74,22 @@ export function ServiciosPanel({
     }
   }
 
+  async function habilitarImagenes() {
+    setOcupado(true);
+    setError('');
+    setMensaje('');
+    try {
+      const servicio = await api.activarImagenesGemini();
+      setMensaje(`Imágenes habilitadas con ${servicio.configuracion.modelo}. Gemini analizó correctamente la imagen de prueba.`);
+      setNombre(''); setProveedor(''); setTipo('IA_IMAGEN'); setEstado(''); setPagina(0);
+      setRecarga(valor => valor + 1);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setOcupado(false);
+    }
+  }
+
   async function verificar(servicio: api.ServicioPlataforma) {
     setOcupado(true);
     setError('');
@@ -143,9 +159,14 @@ export function ServiciosPanel({
             Configura texto, voz e imagen sin exponer credenciales almacenadas.
           </p>
         </div>
-        <button className="primary" disabled={ocupado} onClick={() => setEditar(null)}>
-          Registrar servicio
-        </button>
+        <div className="form-actions">
+          <button className="primary" disabled={ocupado} onClick={habilitarImagenes}>
+            {ocupado ? 'Comprobando servicio…' : 'Habilitar imágenes con Gemini'}
+          </button>
+          <button disabled={ocupado} onClick={() => setEditar(null)}>
+            Registrar servicio
+          </button>
+        </div>
       </div>
       {error && (
         <p className="error" role="alert">

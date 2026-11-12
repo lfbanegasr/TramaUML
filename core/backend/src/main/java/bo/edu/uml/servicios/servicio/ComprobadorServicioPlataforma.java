@@ -3,6 +3,7 @@ package bo.edu.uml.servicios.servicio;
 import bo.edu.uml.compartido.ApiException;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.springframework.stereotype.Service;
 
@@ -18,11 +19,18 @@ import java.util.Locale;
 
 @Service
 public class ComprobadorServicioPlataforma {
-    private final HttpClient http =
-            HttpClient.newBuilder()
+    private final HttpClient http;
+
+    public ComprobadorServicioPlataforma() {
+        this(HttpClient.newBuilder()
                     .connectTimeout(Duration.ofSeconds(3))
                     .followRedirects(HttpClient.Redirect.NEVER)
-                    .build();
+                    .build());
+    }
+
+    ComprobadorServicioPlataforma(HttpClient http) {
+        this.http = http;
+    }
 
     public record Resultado(String estado, Integer latenciaMs, String detalle) {
         public boolean disponible() {
@@ -40,6 +48,13 @@ public class ComprobadorServicioPlataforma {
                 configuracion.path("urlVerificacion").asText("").isBlank()
                         ? urlServicio
                         : configuracion.path("urlVerificacion").asText();
+        // generateContent acepta POST. Su prueba GET debe consultar el recurso del modelo.
+        if ("GEMINI".equals(proveedor) && urlComprobacion != null) {
+            if (urlComprobacion.startsWith("https://generativelanguage.googleapis.com/")) {
+                urlComprobacion = urlComprobacion.replaceFirst(
+                        ":(?:generateContent|streamGenerateContent)(?=\\?|$)", "");
+            }
+        }
         URI uri;
         try {
             uri = validarDestino(urlComprobacion);
@@ -81,6 +96,63 @@ public class ComprobadorServicioPlataforma {
         } catch (Exception e) {
             return new Resultado(
                     "NO_DISPONIBLE", null, "El proveedor no respondió; puede reintentarse.");
+        }
+    }
+
+    public Resultado comprobarImagenGemini(String modelo, String credencial) {
+        if (!modelo.matches("gemini-[a-zA-Z0-9.-]+"))
+            return new Resultado("NO_DISPONIBLE", null, "El identificador del modelo Gemini no es válido.");
+        if (credencial == null || credencial.isBlank())
+            return new Resultado("NO_DISPONIBLE", null, "No hay una clave de Gemini configurada.");
+        long inicio = System.nanoTime();
+        try {
+            URI uri = validarDestino("https://generativelanguage.googleapis.com/v1beta/models/"
+                    + modelo + ":generateContent");
+            // Imagen local de prueba, sin datos del usuario y sin escribir archivos.
+            var imagen = new java.awt.image.BufferedImage(16, 16, java.awt.image.BufferedImage.TYPE_INT_RGB);
+            for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) imagen.setRGB(x, y, 0x176b52);
+            var png = new java.io.ByteArrayOutputStream();
+            javax.imageio.ImageIO.write(imagen, "png", png);
+            var json = new ObjectMapper();
+            var cuerpo = json.createObjectNode();
+            var partes = cuerpo.putArray("contents").addObject().putArray("parts");
+            partes.addObject().put("text", "Describe el color predominante de esta imagen en una frase breve.");
+            partes.addObject().putObject("inline_data").put("mime_type", "image/png")
+                    .put("data", java.util.Base64.getEncoder().encodeToString(png.toByteArray()));
+            var generacion = cuerpo.putObject("generationConfig").put("maxOutputTokens", 1024);
+            if (modelo.startsWith("gemini-3"))
+                generacion.putObject("thinkingConfig").put("thinkingLevel", "low");
+            else generacion.putObject("thinkingConfig").put("thinkingBudget", 0);
+            var solicitud = HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(35))
+                    .header("Content-Type", "application/json")
+                    .header("x-goog-api-key", credencial)
+                    .POST(HttpRequest.BodyPublishers.ofString(cuerpo.toString())).build();
+            var respuesta = http.send(solicitud, HttpResponse.BodyHandlers.ofString());
+            int latencia = (int) Math.min(Integer.MAX_VALUE, (System.nanoTime() - inicio) / 1_000_000L);
+            int codigo = respuesta.statusCode();
+            if (codigo >= 200 && codigo < 300) {
+                var resultado = json.readTree(respuesta.body());
+                for (var parte : resultado.path("candidates").path(0).path("content").path("parts")) {
+                    if (!parte.path("thought").asBoolean(false) && !parte.path("text").asText("").isBlank())
+                        return new Resultado("DISPONIBLE", latencia, "Gemini analizó correctamente la imagen de prueba.");
+                }
+                return new Resultado("NO_DISPONIBLE", latencia, "Gemini respondió sin un análisis de imagen utilizable.");
+            }
+            if (codigo == 401 || (codigo == 400 && respuesta.body().contains("API_KEY_INVALID")))
+                return new Resultado("NO_DISPONIBLE", latencia, "Gemini rechazó la credencial configurada.");
+            if (codigo == 403)
+                return new Resultado("NO_DISPONIBLE", latencia, "Google no autorizó el acceso a este modelo de imagen.");
+            if (codigo == 429)
+                return new Resultado("DEGRADADO", latencia, "Gemini agotó la cuota disponible. Revisa los límites de la API key en Google AI Studio.");
+            if (codigo == 404)
+                return new Resultado("NO_DISPONIBLE", latencia, "El modelo no está disponible para esta API key.");
+            return new Resultado("NO_DISPONIBLE", latencia,
+                    "Gemini no pudo procesar la imagen de prueba (HTTP " + codigo + ").");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return new Resultado("NO_DISPONIBLE", null, "La prueba de imagen fue interrumpida.");
+        } catch (Exception e) {
+            return new Resultado("NO_DISPONIBLE", null, "Gemini no respondió a la prueba de imagen; reintenta la conexión.");
         }
     }
 
