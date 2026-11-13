@@ -67,13 +67,13 @@ public class ValidacionBackendRepositorio {
     public List<GeneracionDisponible> listar(UUID modelo, boolean validar) {
         return jdbc.query(
                 """
-                select g.id,g.id_configuracion,v.id version,v.numero_version,a.nombre_original,g.completado_en
+                select g.id,g.id_configuracion,v.id version,v.numero_version,a.nombre_original,a.sha256,g.completado_en
                 from uml_colaborativo.generacion_backend g
                 join uml_colaborativo.configuracion_generacion_backend c on c.id=g.id_configuracion
                 join uml_colaborativo.version_modelo_uml v on v.id=c.id_version_modelo
                 join uml_colaborativo.archivo_almacenado a on a.id=g.id_archivo_salida
                 where v.id_modelo=:modelo and g.estado='GENERADO'
-                order by g.completado_en desc,g.id desc limit 30
+                order by g.completado_en desc,g.id desc
                 """,
                 Map.of("modelo", modelo),
                 (r, n) -> {
@@ -85,7 +85,7 @@ public class ValidacionBackendRepositorio {
                             r.getInt("numero_version"),
                             r.getString("nombre_original"),
                             r.getTimestamp("completado_en").toInstant(),
-                            ultimo(id),
+                            ultimoConDescarga(id, r.getString("sha256")),
                             validar);
                 });
     }
@@ -98,6 +98,24 @@ public class ValidacionBackendRepositorio {
                         Map.of("id", generacion),
                         UUID.class);
         return ids.isEmpty() ? null : informe(ids.getFirst());
+    }
+
+    /** La aprobación pertenece al contenido del ZIP, no a la última tentativa de compilación. */
+    public Informe aprobado(UUID generacion, String sha) {
+        var ids = jdbc.queryForList(
+                "select v.id from uml_colaborativo.validacion_backend v "
+                        + "join uml_colaborativo.archivo_almacenado a on a.id=v.id_archivo_informe "
+                        + "where v.id_generacion=:id and v.estado in ('VALIDO','VALIDO_CON_ADVERTENCIAS') "
+                        + "and case when a.categoria='INFORME_VALIDACION' and a.tipo_contenido='application/json' "
+                        + "then convert_from(a.contenido,'UTF8')::jsonb->>'sha256' else null end=:sha "
+                        + "order by v.iniciado_en desc,v.id desc limit 1",
+                Map.of("id", generacion, "sha", sha), UUID.class);
+        return ids.isEmpty() ? null : informe(ids.getFirst());
+    }
+
+    public Informe ultimoConDescarga(UUID generacion, String sha) {
+        var ultimo = ultimo(generacion);
+        return ultimo == null ? null : ultimo.conDescarga(aprobado(generacion, sha) != null);
     }
 
     public Informe informe(UUID id) {

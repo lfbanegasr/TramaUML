@@ -22,8 +22,8 @@ public class ActivarImagenesGeminiServicio {
     private final ComprobadorServicioPlataforma comprobador;
     private final TransactionTemplate tx;
     private final String claveEntorno, modeloEntorno;
-    private static final List<String> MODELOS_GRATUITOS =
-            List.of("gemini-3.8-flash", "gemini-3.6-flash", "gemini-2.5-flash", "gemini-3.1-flash-lite");
+    private static final List<String> MODELOS_RESPALDO =
+            List.of("gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.1-flash-lite");
 
     public ActivarImagenesGeminiServicio(ServicioPlataformaRepositorio repo, AccesoRepositorio acceso,
             CifradorSecretosServicio cifrador, ResolverServicioActivo resolver,
@@ -50,14 +50,15 @@ public class ActivarImagenesGeminiServicio {
                 "Configura la API key de Gemini en el servicio de texto o en UML_IA_CLAVE de Render y vuelve a habilitar imágenes.");
         byte[] secreto = cifrador.cifrar(clave);
         var candidatos = new LinkedHashSet<String>();
-        if (MODELOS_GRATUITOS.contains(modeloEntorno)) candidatos.add(modeloEntorno);
-        candidatos.addAll(MODELOS_GRATUITOS);
+        if (modeloEntorno != null && modeloEntorno.matches("[A-Za-z0-9._-]+")) candidatos.add(modeloEntorno);
+        candidatos.addAll(MODELOS_RESPALDO);
         ComprobadorServicioPlataforma.Resultado ultima = null;
         for (String modelo : candidatos) {
             var prueba = comprobador.comprobarImagenGemini(modelo, clave);
             ultima = prueba;
             if (prueba.disponible()) return guardar(actor, modelo, secreto, prueba);
-            if (prueba.detalle().contains("rechazó la credencial")) break;
+            if (prueba.detalle().contains("rechazó la credencial")
+                    || prueba.detalle().toLowerCase(Locale.ROOT).contains("cuota")) break;
         }
         throw new ApiException(503, "El servicio de imágenes no se activó: "
                 + (ultima == null ? "no se pudo comprobar Gemini." : ultima.detalle()));

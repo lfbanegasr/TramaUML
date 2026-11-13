@@ -1,11 +1,20 @@
 import { api } from '../../../shared/api';
 
 export type MensajeAgente = {
-  id: string; secuencia: number; autor: string | null; nombreAutor: string;
-  emisor: 'USUARIO' | 'ASISTENTE'; texto: string; extraccion?: string | null; modalidad: 'TEXTO' | 'VOZ' | 'IMAGEN';
+  id: string;
+  secuencia: number;
+  autor: string | null;
+  nombreAutor: string;
+  emisor: 'USUARIO' | 'ASISTENTE';
+  texto: string;
+  extraccion?: string | null;
+  modalidad: 'TEXTO' | 'VOZ' | 'IMAGEN';
   respuestaA?: string | null;
-  idPropuesta: string | null; tipoResultado: string | null; fuentes: string[];
-  supuestos: string[]; creadoEn: string;
+  idPropuesta: string | null;
+  tipoResultado: string | null;
+  fuentes: string[];
+  supuestos: string[];
+  creadoEn: string;
 };
 export type EjecucionAgente = {
   id: string;
@@ -19,17 +28,54 @@ export type EjecucionAgente = {
   error: string | null;
   modo: string | null;
 };
-export type AcuerdoAgente = { id: string; idMensaje: string; contenido: string; nombreAutor: string; vigente: boolean };
-export type HistorialAgente = { idConversacion: string; mensajes: MensajeAgente[]; cursor: number;
-  hayMas: boolean; ejecuciones: EjecucionAgente[]; acuerdos: AcuerdoAgente[] };
+export type AcuerdoAgente = {
+  id: string;
+  idMensaje: string;
+  contenido: string;
+  nombreAutor: string;
+  vigente: boolean;
+};
+export type HistorialAgente = {
+  idConversacion: string;
+  mensajes: MensajeAgente[];
+  cursor: number;
+  hayMas: boolean;
+  ejecuciones: EjecucionAgente[];
+  acuerdos: AcuerdoAgente[];
+};
 export const leerConversacion = (modelo: string, cursor = 0) =>
   api<HistorialAgente>(`/modelos/${modelo}/ia/conversacion?cursor=${cursor}`);
+export type CapacidadIa = {
+  proveedor: string;
+  modelo: string;
+  configurado: boolean;
+  estado: 'SIN_CONFIGURAR' | 'EN_PAUSA' | 'CONFIGURADO';
+  reintentarEnSegundos: number;
+};
+export type CapacidadesIa = {
+  proveedor: string;
+  modelo: string;
+  configurado: boolean;
+  contextoRemoto: boolean;
+  texto?: CapacidadIa;
+  imagen?: CapacidadIa;
+  voz?: CapacidadIa;
+};
 export const leerCapacidadesAgente = (modelo: string) =>
-  api<{ proveedor: string; modelo: string; configurado: boolean; contextoRemoto: boolean }>(`/modelos/${modelo}/ia/conversacion/capacidades`);
-export const enviarMensajeAgente = (modelo: string, texto: string, clave: string, intencion = 'AUTO') =>
-  api<{ mensaje: MensajeAgente; ejecucion: EjecucionAgente }>(`/modelos/${modelo}/ia/conversacion/mensajes`, {
-    method: 'POST', body: JSON.stringify({ texto, clave, intencion }),
-  });
+  api<CapacidadesIa>(`/modelos/${modelo}/ia/conversacion/capacidades`);
+export const enviarMensajeAgente = (
+  modelo: string,
+  texto: string,
+  clave: string,
+  intencion = 'AUTO',
+) =>
+  api<{ mensaje: MensajeAgente; ejecucion: EjecucionAgente }>(
+    `/modelos/${modelo}/ia/conversacion/mensajes`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ texto, clave, intencion }),
+    },
+  );
 export const enviarVozAgente = (
   modelo: string,
   texto: string,
@@ -51,9 +97,15 @@ export const enviarVozAgente = (
     { method: 'POST', body: cuerpo },
   );
 };
-export const confirmarAcuerdo = (modelo: string, idMensaje: string, contenido: string, sustituye?: string) =>
+export const confirmarAcuerdo = (
+  modelo: string,
+  idMensaje: string,
+  contenido: string,
+  sustituye?: string,
+) =>
   api<AcuerdoAgente[]>(`/modelos/${modelo}/ia/conversacion/acuerdos`, {
-    method: 'POST', body: JSON.stringify({ idMensaje, contenido, sustituye }),
+    method: 'POST',
+    body: JSON.stringify({ idMensaje, contenido, sustituye }),
   });
 export const cancelarEjecucion = (modelo: string, id: string) =>
   api<void>(`/modelos/${modelo}/ia/conversacion/ejecuciones/${id}/cancelar`, { method: 'POST' });
@@ -63,23 +115,41 @@ async function enviarAdjunto(
   modalidad: 'voz' | 'imagen',
   cuerpo: FormData,
   intencion?: string,
+  clave?: string,
 ): Promise<ResultadoSolicitudIa> {
-  cuerpo.append('clave', crypto.randomUUID());
+  cuerpo.append('clave', clave ?? crypto.randomUUID());
   cuerpo.append('intencion', intencion ?? (modalidad === 'imagen' ? 'MODIFICAR' : 'AUTO'));
-  const aceptado = await api<{ ejecucion: EjecucionAgente }>(`/modelos/${modelo}/ia/conversacion/${modalidad}`, { method: 'POST', body: cuerpo });
+  const aceptado = await api<{ ejecucion: EjecucionAgente }>(
+    `/modelos/${modelo}/ia/conversacion/${modalidad}`,
+    { method: 'POST', body: cuerpo },
+  );
   return esperarResultado(modelo, aceptado.ejecucion.id);
 }
 
+export class ErrorEjecucionIa extends Error {}
+
 async function esperarResultado(modelo: string, id: string): Promise<ResultadoSolicitudIa> {
   for (let intento = 0; intento < 180; intento++) {
-    const e = await api<EjecucionAgente & { revisionBase: number; resultado: { idPropuesta?: string; texto: string } }>(`/modelos/${modelo}/ia/conversacion/ejecuciones/${id}`);
-    if (e.estado === 'COMPLETADO') return { idSolicitud: e.id, idPropuesta: e.resultado.idPropuesta ?? null,
-      estadoSolicitud: 'COMPLETADO', resumen: e.resultado.texto, confianzaGeneral: null,
-      revisionBase: e.revisionBase, mensaje: e.resultado.texto };
-    if (e.estado === 'FALLIDO' || e.estado === 'CANCELADO') throw new Error(e.error ?? 'Solicitud cancelada. El adjunto se conserva.');
-    await new Promise(resolve => window.setTimeout(resolve, 1000));
+    const e = await api<
+      EjecucionAgente & { revisionBase: number; resultado: { idPropuesta?: string; texto: string } }
+    >(`/modelos/${modelo}/ia/conversacion/ejecuciones/${id}`);
+    if (e.estado === 'COMPLETADO')
+      return {
+        idSolicitud: e.id,
+        idPropuesta: e.resultado.idPropuesta ?? null,
+        estadoSolicitud: 'COMPLETADO',
+        resumen: e.resultado.texto,
+        confianzaGeneral: null,
+        revisionBase: e.revisionBase,
+        mensaje: e.resultado.texto,
+      };
+    if (e.estado === 'FALLIDO' || e.estado === 'CANCELADO')
+      throw new ErrorEjecucionIa(e.error ?? 'Solicitud cancelada. El adjunto se conserva.');
+    await new Promise((resolve) => window.setTimeout(resolve, 1000));
   }
-  throw new Error('La solicitud sigue en el servidor. Reabre el chat para recuperar su resultado antes de reenviar.');
+  throw new Error(
+    'La solicitud sigue en el servidor. Reabre el chat para recuperar su resultado antes de reenviar.',
+  );
 }
 
 export type EstadoPropuestaIa =
@@ -137,9 +207,12 @@ export type ResultadoAplicacionIa = {
   mensaje: string;
 };
 
-export const solicitarTexto = async (modelo: string, prompt: string): Promise<ResultadoSolicitudIa> => {
-  const entrada = await enviarMensajeAgente(modelo,prompt,crypto.randomUUID());
-  return esperarResultado(modelo,entrada.ejecucion.id);
+export const solicitarTexto = async (
+  modelo: string,
+  prompt: string,
+): Promise<ResultadoSolicitudIa> => {
+  const entrada = await enviarMensajeAgente(modelo, prompt, crypto.randomUUID());
+  return esperarResultado(modelo, entrada.ejecucion.id);
 };
 
 export function solicitarVoz(
@@ -161,11 +234,12 @@ export function solicitarImagen(
   archivo: File,
   textoDetectado?: string,
   intencion = 'MODIFICAR',
+  clave?: string,
 ): Promise<ResultadoSolicitudIa> {
   const cuerpo = new FormData();
   cuerpo.append('archivo', archivo);
   if (textoDetectado?.trim()) cuerpo.append('textoDetectado', textoDetectado.trim());
-  return enviarAdjunto(modelo, 'imagen', cuerpo, intencion);
+  return enviarAdjunto(modelo, 'imagen', cuerpo, intencion, clave);
 }
 
 export const leerPropuestaVigente = (modelo: string): Promise<PropuestaIa | undefined> =>

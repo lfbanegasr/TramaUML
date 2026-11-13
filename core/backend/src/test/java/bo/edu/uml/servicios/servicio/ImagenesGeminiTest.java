@@ -72,7 +72,7 @@ class ImagenesGeminiTest {
                 new ComprobadorServicioPlataforma.Resultado("DEGRADADO", 5, "Gemini agotó la cuota disponible."));
         assertThatThrownBy(() -> service.activar(admin)).isInstanceOf(ApiException.class).hasMessageContaining("cuota");
         verifyNoInteractions(repo);
-        verify(comprobador, times(4)).comprobarImagenGemini(anyString(), eq("clave-ficticia"));
+        verify(comprobador, times(1)).comprobarImagenGemini(anyString(), eq("clave-ficticia"));
     }
 
     @Test

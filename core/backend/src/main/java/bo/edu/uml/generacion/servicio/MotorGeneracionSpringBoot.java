@@ -2637,10 +2637,15 @@ public class MotorGeneracionSpringBoot {
     }
 
     private Map<String, Object> identificador(List<Map<String, Object>> atributos) {
-        return atributos.stream()
+        var definido = atributos.stream()
                 .filter(a -> bool(a.get("es_identificador")))
-                .findFirst()
-                .orElse(Map.of("nombre", "id", "tipo_uml", "Long"));
+                .findFirst();
+        if (definido.isPresent()) return definido.get();
+        Set<String> nombres = atributos.stream().map(a -> campoJava(str(a.get("nombre"))))
+                .collect(Collectors.toSet());
+        String tecnico = "id";
+        for (int n = 1; nombres.contains(tecnico); n++) tecnico = "idBackend" + (n == 1 ? "" : n);
+        return Map.of("nombre", tecnico, "tipo_uml", "Long");
     }
 
     private String tipoId(List<Map<String, Object>> atributos) {

@@ -19,8 +19,9 @@ public class ValidacionControlador {
 
     @PostMapping
     @ResponseStatus(org.springframework.http.HttpStatus.ACCEPTED)
-    Object solicitar(@AuthenticationPrincipal Identidad a, @PathVariable UUID modelo) {
-        return servicio.solicitar(a, modelo);
+    Object solicitar(@AuthenticationPrincipal Identidad a, @PathVariable UUID modelo,
+            @RequestParam(required = false) UUID version) {
+        return servicio.solicitar(a, modelo, version);
     }
 
     @GetMapping(path = {"", "/reciente"})

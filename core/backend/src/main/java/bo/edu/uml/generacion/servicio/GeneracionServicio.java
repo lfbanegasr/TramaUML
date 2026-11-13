@@ -131,10 +131,6 @@ public class GeneracionServicio {
 
         VersionSnapshot version =
                 repo.version(modelo, cfg.idVersionModelo(), cabecera.idVersionActual());
-        if (!Set.of("VALIDO", "VALIDO_CON_ADVERTENCIAS")
-                .contains(version.resumen().estadoValidacion()))
-            throw new ApiException(
-                    422, "La versión UML debe superar la validación semántica antes de generar.");
 
         List<ClasePersistida> seleccion = repo.clasesConfiguracion(cfg.id());
         if (seleccion.isEmpty())
@@ -301,11 +297,7 @@ public class GeneracionServicio {
                 mapeos,
                 dependencias,
                 mensajes,
-                cfg != null
-                        && "VALIDO".equals(cfg.estado())
-                        && !tieneErrores(mensajes)
-                        && Set.of("VALIDO", "VALIDO_CON_ADVERTENCIAS")
-                                .contains(version.resumen().estadoValidacion()));
+                !tieneErrores(mensajes) && (cfg == null || !"ARCHIVADO".equals(cfg.estado())));
     }
 
     private Preparacion preparar(JsonNode snapshot, ActualizarConfiguracion cfg) {
@@ -697,12 +689,12 @@ public class GeneracionServicio {
             for (SeleccionClase c : persistentes) {
                 if (!clasesConId.contains(c.idClase())) {
                     mensajes.add(
-                            error(
+                            new MensajeConfiguracion("ADVERTENCIA",
                                     "CLASE_SIN_ID",
                                     "En la clase persistente '"
                                             + c.nombreEntidad()
-                                            + "', no se ha definido un atributo identificador"
-                                            + " (@Id)."));
+                                            + "' se generará un identificador técnico Long en el backend."
+                                            + " La versión UML guardada no se modifica."));
                 }
             }
         }
@@ -712,8 +704,8 @@ public class GeneracionServicio {
                     new MensajeConfiguracion(
                             "ADVERTENCIA",
                             "VERSION_SIN_VALIDAR",
-                            "La configuración puede guardarse, pero la versión UML debe validarse"
-                                    + " antes de generar."));
+                            "Puedes generar sin validar esta versión UML. La revisión semántica"
+                                    + " es opcional e independiente de la compilación del backend."));
         if (!version.versionActual())
             mensajes.add(
                     new MensajeConfiguracion(

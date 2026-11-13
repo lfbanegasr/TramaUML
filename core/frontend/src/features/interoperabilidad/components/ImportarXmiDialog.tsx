@@ -26,23 +26,28 @@ export function ImportarXmiDialog({
   const [error, setError] = useState('');
   const [arrastrando, setArrastrando] = useState(false);
   const solicitudCarga = useRef(crypto.randomUUID());
+  const solicitudAplicacion = useRef(crypto.randomUUID());
 
   function seleccionar(seleccionado?: File) {
     setError('');
     if (!seleccionado) return;
     if (!/\.(xmi|xml)$/i.test(seleccionado.name)) {
+      setArchivo(null);
       setError('Selecciona un archivo con extensión .xmi o .xml.');
       return;
     }
-    if (seleccionado.size > 5 * 1024 * 1024) {
-      setError('El archivo supera el límite de 5 MB.');
+    if (seleccionado.size === 0 || seleccionado.size > 5 * 1024 * 1024) {
+      setArchivo(null);
+      setError('Selecciona un archivo con contenido de hasta 5 MB.');
       return;
     }
     setArchivo(seleccionado);
+    solicitudCarga.current = crypto.randomUUID();
+    solicitudAplicacion.current = crypto.randomUUID();
   }
 
   async function analizar() {
-    if (!archivo) return;
+    if (!archivo || ocupado) return;
     setEstado('analizando');
     setError('');
     try {
@@ -59,7 +64,7 @@ export function ImportarXmiDialog({
   }
 
   async function aplicar() {
-    if (!resultado) return;
+    if (!resultado || ocupado || !resultado.puedeAplicar) return;
     setEstado('aplicando');
     setError('');
     try {
@@ -68,18 +73,25 @@ export function ImportarXmiDialog({
         resultado.idIntercambio,
         sesion,
         resultado.revisionBase,
-        crypto.randomUUID(),
+        solicitudAplicacion.current,
       );
       setEstado('completado');
-      await alAplicar();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo aplicar la importación.');
       setEstado('revision');
+      return;
+    }
+    try {
+      await alAplicar();
+    } catch {
+      setError(
+        'La importación se guardó. No se pudo refrescar el lienzo; vuelve a abrir el modelo para verla.',
+      );
     }
   }
 
   async function cancelar() {
-    if (resultado?.estado === 'LISTO_PARA_REVISION') {
+    if (estado !== 'completado' && resultado?.estado === 'LISTO_PARA_REVISION') {
       try {
         await cancelarImportacionXmi(modelo, resultado.idIntercambio);
       } catch (e) {
@@ -88,6 +100,24 @@ export function ImportarXmiDialog({
       }
     }
     cerrar();
+  }
+
+  async function volver() {
+    setError('');
+    if (resultado?.estado === 'LISTO_PARA_REVISION') {
+      setEstado('analizando');
+      try {
+        await cancelarImportacionXmi(modelo, resultado.idIntercambio);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'No se pudo cerrar la previsualización.');
+        setEstado('revision');
+        return;
+      }
+    }
+    setResultado(null);
+    solicitudCarga.current = crypto.randomUUID();
+    solicitudAplicacion.current = crypto.randomUUID();
+    setEstado('seleccion');
   }
 
   const ocupado = estado === 'analizando' || estado === 'aplicando';
@@ -115,6 +145,24 @@ export function ImportarXmiDialog({
           </button>
         </div>
         <div className="dialog-body">
+          <ol className="workflow-steps" aria-label="Pasos de importación">
+            {['Seleccionar archivo', 'Revisar cambios', 'Aplicar y guardar versión'].map(
+              (paso, i) => (
+                <li
+                  key={paso}
+                  aria-current={
+                    (i === 0 && !resultado) ||
+                    (i === 1 && !!resultado && estado !== 'completado') ||
+                    (i === 2 && estado === 'completado')
+                      ? 'step'
+                      : undefined
+                  }
+                >
+                  {paso}
+                </li>
+              ),
+            )}
+          </ol>
           {(estado === 'seleccion' || estado === 'error') && !resultado && (
             <>
               <p className="dialog-desc">
@@ -147,7 +195,10 @@ export function ImportarXmiDialog({
                 <select
                   id="xmi-estrategia"
                   value={estrategia}
-                  onChange={(e) => setEstrategia(e.target.value as 'FUSIONAR' | 'REEMPLAZAR')}
+                  onChange={(e) => {
+                    setEstrategia(e.target.value as 'FUSIONAR' | 'REEMPLAZAR');
+                    solicitudCarga.current = crypto.randomUUID();
+                  }}
                 >
                   <option value="FUSIONAR">Fusionar con el modelo actual</option>
                   <option value="REEMPLAZAR">Reemplazar el contenido actual</option>
@@ -247,13 +298,18 @@ export function ImportarXmiDialog({
             </button>
           )}
           {resultado && estado !== 'completado' && (
-            <button
-              className="primary"
-              onClick={aplicar}
-              disabled={!resultado.puedeAplicar || ocupado}
-            >
-              {estado === 'aplicando' ? 'Aplicando…' : 'Aplicar importación'}
-            </button>
+            <>
+              <button onClick={() => void volver()} disabled={ocupado}>
+                Cambiar archivo o estrategia
+              </button>
+              <button
+                className="primary"
+                onClick={aplicar}
+                disabled={!resultado.puedeAplicar || ocupado}
+              >
+                {estado === 'aplicando' ? 'Aplicando…' : 'Aplicar importación'}
+              </button>
+            </>
           )}
         </div>
       </div>

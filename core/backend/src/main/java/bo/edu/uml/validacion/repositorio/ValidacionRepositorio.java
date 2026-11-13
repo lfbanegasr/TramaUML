@@ -21,6 +21,21 @@ public class ValidacionRepositorio {
         this.json = json;
     }
 
+    /** Selecciona una instantánea del mismo modelo sin restaurarla ni cambiar su revisión. */
+    public Cabecera version(Cabecera c, UUID version) {
+        UUID seleccionada = version == null ? c.version() : version;
+        if (seleccionada == null)
+            throw new ApiException(422, "Primero guarda una versión del modelo.");
+        return jdbc.query(
+                "select id,revision from uml_colaborativo.version_modelo_uml "
+                        + "where id=:version and id_modelo=:modelo",
+                Map.of("version", seleccionada, "modelo", c.id()),
+                (r, n) -> new Cabecera(c.id(), c.proyecto(), c.nombre(), r.getLong("revision"),
+                        r.getObject("id", UUID.class), c.estado(), c.estadoProyecto()))
+                .stream().findFirst()
+                .orElseThrow(() -> new ApiException(404, "La versión no pertenece a este modelo."));
+    }
+
     public UUID crear(Cabecera c, UUID actor) {
         if (c.version() == null)
             throw new ApiException(422, "Primero guarda una versión del modelo.");

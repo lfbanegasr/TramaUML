@@ -21,5 +21,6 @@ END $$;
 \ir ../core/docs/migraciones/2026-09-21_09_validacion_backend.sql
 \ir ../core/docs/migraciones/2026-11-10_10_subconjunto_uml_251.sql
 \ir ../core/docs/migraciones/2026-11-10_11_agente_colaborativo.sql
+\ir ../core/docs/migraciones/2026-11-13_12_generacion_independiente.sql
 ALTER ROLE uml_app LOGIN;
 \echo 'Esquema instalado. Asigne una clave exclusiva con: \password uml_app'

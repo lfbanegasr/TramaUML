@@ -45,17 +45,19 @@ public class ValidacionBackendServicio {
     @Transactional
     public Informe solicitar(Identidad actor, UUID modelo, UUID generacion) {
         autorizar(actor, modelo, "VALIDAR_BACKEND");
-        repo.artefacto(modelo, generacion, true);
+        var artefacto = repo.artefacto(modelo, generacion, true);
         Informe ultimo = repo.ultimo(generacion);
-        if (ultimo != null && "EN_EJECUCION".equals(ultimo.estado())) return ultimo;
-        return repo.informe(repo.crear(generacion, actor.id()));
+        if (ultimo != null && "EN_EJECUCION".equals(ultimo.estado()))
+            return ultimo.conDescarga(repo.aprobado(generacion, artefacto.sha256()) != null);
+        return repo.informe(repo.crear(generacion, actor.id()))
+                .conDescarga(repo.aprobado(generacion, artefacto.sha256()) != null);
     }
 
     @Transactional(readOnly = true)
     public Informe informe(Identidad actor, UUID modelo, UUID generacion) {
         autorizar(actor, modelo, "VER_MODELO");
-        repo.artefacto(modelo, generacion, false);
-        Informe informe = repo.ultimo(generacion);
+        var artefacto = repo.artefacto(modelo, generacion, false);
+        Informe informe = repo.ultimoConDescarga(generacion, artefacto.sha256());
         if (informe == null)
             throw new ApiException(404, "Este backend todavía no tiene una validación.");
         return informe;
@@ -65,12 +67,12 @@ public class ValidacionBackendServicio {
     public ContenidoArchivo descargar(Identidad actor, UUID modelo, UUID generacion) {
         autorizar(actor, modelo, "DESCARGAR_ARTEFACTO");
         var artefacto = repo.artefacto(modelo, generacion, true);
-        var informe = repo.ultimo(generacion);
+        String hash = ValidacionBackendRepositorio.sha256(artefacto.contenido());
+        var informe = repo.aprobado(generacion, hash);
         if (informe == null || !informe.puedeDescargar())
             throw new ApiException(
                     409,
-                    "La descarga requiere que la última validación del backend esté aprobada.");
-        String hash = ValidacionBackendRepositorio.sha256(artefacto.contenido());
+                    "Este ZIP todavía no tiene una compilación aprobada. Valídalo o elige una generación aprobada del historial.");
         if (!hash.equals(informe.sha256()) || !hash.equals(artefacto.sha256()))
             throw new ApiException(
                     409, "El artefacto cambió después de la validación. Debe volver a validarse.");

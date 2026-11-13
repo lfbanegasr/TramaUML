@@ -321,7 +321,22 @@ public class ConectorIaRemoto implements ProveedorIa {
   @Override
   public Map<String, Object> configuracionPublica() {
     var c = configuracion("IA_TEXTO", urlTexto, modeloTexto);
-    return Map.of("proveedor", c.proveedor(), "modelo", c.modelo(), "configurado", configurado(c));
+    return Map.of("proveedor", c.proveedor(), "modelo", c.modelo(), "configurado", configurado(c),
+        "texto", capacidadPublica(c, "texto"),
+        "imagen", capacidadPublica(configuracion("IA_IMAGEN", urlVision, modeloVision), "visión"),
+        "voz", capacidadPublica(configuracion("VOZ_A_TEXTO", urlTranscripcion, modeloTranscripcion), "transcripción"));
+  }
+
+  private String clavePausa(ConfiguracionProveedor c, String capacidad) {
+    return ("conversación".equals(capacidad) ? "texto" : capacidad) + ":" + c.hashCode();
+  }
+
+  private Map<String, Object> capacidadPublica(ConfiguracionProveedor c, String capacidad) {
+    long segundos = Math.max(0, (pausasHasta.getOrDefault(clavePausa(c, capacidad), 0L)
+        - System.currentTimeMillis() + 999) / 1000);
+    return Map.of("proveedor", c.proveedor(), "modelo", c.modelo(), "configurado", configurado(c),
+        "estado", !configurado(c) ? "SIN_CONFIGURAR" : segundos > 0 ? "EN_PAUSA" : "CONFIGURADO",
+        "reintentarEnSegundos", segundos);
   }
 
   @Override
@@ -386,9 +401,10 @@ public class ConectorIaRemoto implements ProveedorIa {
       String tipoContenido,
       byte[] contenido,
       String capacidad) {
-    if (System.currentTimeMillis() < pausasHasta.getOrDefault(capacidad, 0L)) {
+    String clavePausa = clavePausa(configuracion, capacidad);
+    if (System.currentTimeMillis() < pausasHasta.getOrDefault(clavePausa, 0L)) {
       if ("visión".equals(capacidad)) throw new ApiException(429,
-          "Gemini agotó temporalmente su cuota de imágenes. Espera un minuto y vuelve a intentar; la foto se conserva.");
+          "El proveedor de imágenes está en pausa por límite de solicitudes. Espera antes de reintentar; la foto se conserva.");
       return Optional.empty();
     }
     try {
@@ -404,7 +420,6 @@ public class ConectorIaRemoto implements ProveedorIa {
           solicitud
               .putObject("generationConfig")
               .put("responseMimeType", "application/json")
-              .put("temperature", 0.4)
               .put("maxOutputTokens", 16384);
         respuesta = enviarGeminiConRespaldo(configuracion, solicitud);
       } else if (es(configuracion, "OLLAMA"))
@@ -417,7 +432,7 @@ public class ConectorIaRemoto implements ProveedorIa {
       return resultado;
     } catch (RestClientException | IllegalArgumentException e) {
       if (e instanceof org.springframework.web.client.HttpClientErrorException.TooManyRequests)
-        pausasHasta.put(capacidad, System.currentTimeMillis() + 60000);
+        pausasHasta.put(clavePausa, System.currentTimeMillis() + 60000);
       LOG.warn(
           "Proveedor IA {} no disponible para {}: {} - {}",
           configuracion.proveedor(),
@@ -426,10 +441,12 @@ public class ConectorIaRemoto implements ProveedorIa {
           "respuesta omitida para proteger credenciales y contexto");
       if ("visión".equals(capacidad)) {
         if (e instanceof org.springframework.web.client.HttpClientErrorException.TooManyRequests)
-          throw new ApiException(429, "Gemini agotó la cuota disponible para analizar imágenes. Revisa los límites de la API key en Google AI Studio; no se aplicaron cambios.");
+          throw new ApiException(429, "El proveedor agotó la cuota disponible para analizar imágenes. Revisa sus límites o espera antes de reintentar; no se aplicaron cambios.");
         if (e instanceof org.springframework.web.client.HttpClientErrorException fallo
             && (fallo.getStatusCode().value() == 401 || fallo.getStatusCode().value() == 403))
-          throw new ApiException(503, "Google rechazó la clave de Gemini o el acceso al modelo de imágenes. Revisa el servicio en Administración → Servicios.");
+          throw new ApiException(503, "El proveedor rechazó la credencial o el acceso al modelo de imágenes. Revisa el servicio en Administración → Servicios.");
+        if (e instanceof org.springframework.web.client.HttpClientErrorException.NotFound)
+          throw new ApiException(503, "No se encontró el modelo o la URL del servicio de imágenes. Revisa su configuración en Administración → Servicios.");
         throw new ApiException(503, "El proveedor de imágenes no pudo completar el análisis. Comprueba su conexión en Administración → Servicios y vuelve a intentar.");
       }
       return Optional.empty();
@@ -520,12 +537,11 @@ public class ConectorIaRemoto implements ProveedorIa {
       List.of(
           "gemini-3.8-flash",
           "gemini-3.6-flash",
-          "gemini-2.5-flash",
           "gemini-3.1-flash-lite");
 
   private JsonNode enviarGeminiConRespaldo(
       ConfiguracionProveedor configuracion, ObjectNode solicitud) {
-    if (!configuracion.url().contains("generativelanguage.googleapis.com")) {
+    if (!"generativelanguage.googleapis.com".equals(java.net.URI.create(configuracion.url()).getHost())) {
       return enviarJson(configuracion, solicitud);
     }
     LinkedHashSet<String> candidatos = new LinkedHashSet<>();
@@ -542,9 +558,7 @@ public class ConectorIaRemoto implements ProveedorIa {
               configuracion.proveedor(), configuracion.clave(), urlCandidata, candidato);
       try {
         return enviarJson(cfg, solicitud);
-      } catch (org.springframework.web.client.HttpClientErrorException.NotFound
-          | org.springframework.web.client.HttpClientErrorException.BadRequest
-          | org.springframework.web.client.HttpClientErrorException.TooManyRequests e) {
+      } catch (org.springframework.web.client.HttpClientErrorException.NotFound e) {
         ultimoError = e;
       }
     }

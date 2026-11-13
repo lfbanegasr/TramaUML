@@ -1,7 +1,22 @@
-import { useState, useRef, useEffect, useLayoutEffect, type FormEvent, type KeyboardEvent } from 'react';
 import {
-  enviarMensajeAgente, enviarVozAgente, leerConversacion, leerCapacidadesAgente, confirmarAcuerdo, cancelarEjecucion,
-  type MensajeAgente, type AcuerdoAgente, type EjecucionAgente,
+  useState,
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  type FormEvent,
+  type KeyboardEvent,
+} from 'react';
+import { createPortal } from 'react-dom';
+import {
+  enviarMensajeAgente,
+  enviarVozAgente,
+  leerConversacion,
+  leerCapacidadesAgente,
+  confirmarAcuerdo,
+  cancelarEjecucion,
+  type MensajeAgente,
+  type AcuerdoAgente,
+  type EjecucionAgente,
   leerPropuesta,
   revisarPropuesta,
   aplicarPropuesta,
@@ -101,17 +116,26 @@ export function PanelAsistenteIa({
   const [intencion, setIntencion] = useState('AUTO');
   const [errorChat, setErrorChat] = useState('');
   const [modoProveedor, setModoProveedor] = useState('Memoria en PostgreSQL');
+  const [modoImagen, setModoImagen] = useState('');
   const [acuerdos, setAcuerdos] = useState<AcuerdoAgente[]>([]);
   const [ejecuciones, setEjecuciones] = useState<EjecucionAgente[]>([]);
   const cursorChat = useRef(0);
   const entradasChat = useRef(new Map<string, MensajeAgente>());
-  const reintento = useRef<{ texto: string; clave: string } | null>(null);
+  const reintento = useRef<{
+    texto: string;
+    clave: string;
+    intencion: string;
+    voz: boolean;
+  } | null>(null);
   const sincronizarChat = useRef<() => Promise<void>>(async () => {});
   const [escuchandoVoz, setEscuchandoVoz] = useState(false);
   const [segundosVoz, setSegundosVoz] = useState(0);
   const [errorVoz, setErrorVoz] = useState('');
   const [procesandoPropuesta, setProcesandoPropuesta] = useState<string | null>(null);
   const [verIdeas, setVerIdeas] = useState(false);
+  const [ampliado, setAmpliado] = useState(false);
+  const panelRef = useRef<HTMLElement | null>(null);
+  const ampliarRef = useRef<HTMLButtonElement | null>(null);
   const [contextoClase, setContextoClase] = useState<string | null>(claseSeleccionada ?? null);
 
   const listaRef = useRef<HTMLDivElement | null>(null);
@@ -121,7 +145,41 @@ export function PanelAsistenteIa({
       listaRef.current.scrollTop = posicionAntesDeSincronizar.current;
       posicionAntesDeSincronizar.current = null;
     }
-  }, [mensajes, acuerdos, ejecuciones]);
+  }, [mensajes, acuerdos, ejecuciones, ampliado]);
+  function alternarAmpliado() {
+    posicionAntesDeSincronizar.current = listaRef.current?.scrollTop ?? null;
+    setAmpliado((actual) => !actual);
+  }
+  useLayoutEffect(() => {
+    if (ampliado) ampliarRef.current?.focus();
+  }, [ampliado]);
+  useEffect(() => {
+    if (!ampliado) return;
+    const teclado = (evento: globalThis.KeyboardEvent) => {
+      if (evento.key === 'Escape') {
+        evento.preventDefault();
+        posicionAntesDeSincronizar.current = listaRef.current?.scrollTop ?? null;
+        setAmpliado(false);
+      }
+      if (evento.key !== 'Tab') return;
+      const controles = Array.from(
+        panelRef.current?.querySelectorAll<HTMLElement>(
+          'button:not(:disabled),select:not(:disabled),textarea:not(:disabled),input:not(:disabled),summary,a[href]',
+        ) ?? [],
+      ).filter((el) => el.getClientRects().length > 0);
+      const primero = controles[0],
+        ultimo = controles.at(-1);
+      if (evento.shiftKey && document.activeElement === primero) {
+        evento.preventDefault();
+        ultimo?.focus();
+      } else if (!evento.shiftKey && document.activeElement === ultimo) {
+        evento.preventDefault();
+        primero?.focus();
+      }
+    };
+    document.addEventListener('keydown', teclado);
+    return () => document.removeEventListener('keydown', teclado);
+  }, [ampliado]);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const reconocimientoRef = useRef<any>(null);
   const grabadorRef = useRef<MediaRecorder | null>(null);
@@ -135,13 +193,43 @@ export function PanelAsistenteIa({
   const autoEnviarVozRef = useRef(true);
 
   useEffect(() => {
-    let vigente = true, ocupado = false;
-    cursorChat.current = 0; entradasChat.current.clear();
+    let vigente = true,
+      ocupado = false;
+    cursorChat.current = 0;
+    entradasChat.current.clear();
     reintento.current = null;
-    setMensajes([{ id: 'bienvenida', emisor: 'ASISTENTE', texto: 'Chat compartido de este modelo. Soy un desarrollador más del equipo: pregúntame qué le falta al diagrama, cómo relacionar clases o cómo desarrollar un módulo (por ejemplo inventarios). Tengo en cuenta lo que dicen los demás integrantes y los acuerdos confirmados. También puedo proponer cambios, que revisas antes de aplicar.', hora: horaActual() }]);
-    void leerCapacidadesAgente(modelo).then(c => { if (vigente) setModoProveedor(
-      c.configurado && c.contextoRemoto ? `Contexto con ${c.proveedor} · ${c.modelo}` : 'Modo local · Memoria en PostgreSQL',
-    ); }).catch(() => {});
+    setMensajes([
+      {
+        id: 'bienvenida',
+        emisor: 'ASISTENTE',
+        texto:
+          'Chat compartido de este modelo. Soy un desarrollador más del equipo: pregúntame qué le falta al diagrama, cómo relacionar clases o cómo desarrollar un módulo (por ejemplo inventarios). Tengo en cuenta lo que dicen los demás integrantes y los acuerdos confirmados. También puedo proponer cambios, que revisas antes de aplicar.',
+        hora: horaActual(),
+      },
+    ]);
+    const capacidades = async () => {
+      try {
+        const c = await leerCapacidadesAgente(modelo);
+        if (!vigente) return;
+        setModoProveedor(
+          c.configurado && c.contextoRemoto
+            ? c.texto?.estado === 'EN_PAUSA'
+              ? 'Texto remoto en pausa por cuota · respaldo local disponible'
+              : `Texto con ${c.proveedor} · ${c.modelo}`
+            : 'Texto en modo local · Memoria en PostgreSQL',
+        );
+        setModoImagen(
+          c.imagen
+            ? c.imagen.configurado
+              ? `Imágenes: ${c.imagen.proveedor} · ${c.imagen.modelo}${c.imagen.estado === 'EN_PAUSA' ? ' · en pausa por cuota' : ''}`
+              : 'Imágenes sin configurar · Administración → Servicios'
+            : '',
+        );
+      } catch {
+        /* La conversación puede continuar aunque no se actualice el estado de servicios. */
+      }
+    };
+    void capacidades();
     const sincronizar = async () => {
       if (ocupado || !vigente) return;
       ocupado = true;
@@ -150,46 +238,83 @@ export function PanelAsistenteIa({
         do {
           pagina = await leerConversacion(modelo, cursorChat.current);
           if (!vigente) return;
-          pagina.mensajes.forEach(m => entradasChat.current.set(m.id, m));
+          pagina.mensajes.forEach((m) => entradasChat.current.set(m.id, m));
           cursorChat.current = pagina.cursor;
         } while (pagina.hayMas);
         const anteriores = Array.from(entradasChat.current.values());
         const propuestas = new Map<string, PropuestaIa>();
-        await Promise.all(anteriores.filter(m => m.idPropuesta).slice(-20).map(async m => {
-          propuestas.set(m.idPropuesta!, await leerPropuesta(modelo, m.idPropuesta!));
-        }));
+        await Promise.all(
+          anteriores
+            .filter((m) => m.idPropuesta)
+            .slice(-20)
+            .map(async (m) => {
+              propuestas.set(m.idPropuesta!, await leerPropuesta(modelo, m.idPropuesta!));
+            }),
+        );
         if (!vigente) return;
         posicionAntesDeSincronizar.current = listaRef.current?.scrollTop ?? null;
-        setAcuerdos(pagina.acuerdos); setEjecuciones(pagina.ejecuciones);
-        setMensajes(prev => {
-          const porId = new Map(prev.map(m => [m.id, m]));
-          const nuevos = anteriores.map(m => {
+        setAcuerdos(pagina.acuerdos);
+        setEjecuciones(pagina.ejecuciones);
+        setMensajes((prev) => {
+          const porId = new Map(prev.map((m) => [m.id, m]));
+          const nuevos = anteriores.map((m) => {
             const p = m.idPropuesta ? propuestas.get(m.idPropuesta) : undefined;
             const anterior = porId.get(m.id);
             const origen = m.respuestaA ? entradasChat.current.get(m.respuestaA) : undefined;
             return {
-              id: m.id, emisor: m.emisor, texto: m.texto, autor: m.nombreAutor,
+              id: m.id,
+              emisor: m.emisor,
+              texto: m.texto,
+              autor: m.nombreAutor,
               respuestaANombre: origen?.nombreAutor,
-              hora: new Date(m.creadoEn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              metodoEntrada: m.modalidad, fuentes: m.fuentes, supuestos: m.supuestos,
+              hora: new Date(m.creadoEn).toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit',
+              }),
+              metodoEntrada: m.modalidad,
+              fuentes: m.fuentes,
+              supuestos: m.supuestos,
               extraccion: m.extraccion,
-              propuesta: p, estadoPropuesta: p?.estado === 'APLICADO' ? 'APLICADA' as const : p?.estado === 'RECHAZADO' ? 'RECHAZADA' as const : 'PENDIENTE' as const,
-              operacionesSeleccionadas: anterior?.operacionesSeleccionadas ?? (p ? Object.fromEntries(p.operaciones.map(o => [o.id, o.seleccionada])) : undefined),
+              propuesta: p,
+              estadoPropuesta:
+                p?.estado === 'APLICADO'
+                  ? ('APLICADA' as const)
+                  : p?.estado === 'RECHAZADO'
+                    ? ('RECHAZADA' as const)
+                    : ('PENDIENTE' as const),
+              operacionesSeleccionadas:
+                anterior?.operacionesSeleccionadas ??
+                (p
+                  ? Object.fromEntries(p.operaciones.map((o) => [o.id, o.seleccionada]))
+                  : undefined),
             };
           });
           // Conserva entradas antiguas de voz/imagen hasta que el servidor las incorpore.
-          const externas = prev.filter(m => m.id !== 'bienvenida' && !entradasChat.current.has(m.id)
-            && !m.id.startsWith('pendiente-') && (!m.propuesta || !anteriores.some(x => x.idPropuesta === m.propuesta!.id)));
+          const externas = prev.filter(
+            (m) =>
+              m.id !== 'bienvenida' &&
+              !entradasChat.current.has(m.id) &&
+              !m.id.startsWith('pendiente-') &&
+              (!m.propuesta || !anteriores.some((x) => x.idPropuesta === m.propuesta!.id)),
+          );
           return nuevos.length ? [...nuevos, ...externas] : prev;
         });
         setErrorChat('');
-      } catch (e) { if (vigente) setErrorChat((e as Error).message); }
-      finally { ocupado = false; }
+      } catch (e) {
+        if (vigente) setErrorChat((e as Error).message);
+      } finally {
+        ocupado = false;
+      }
     };
     sincronizarChat.current = sincronizar;
     void sincronizar();
     const timer = window.setInterval(() => void sincronizar(), 2000);
-    return () => { vigente = false; window.clearInterval(timer); };
+    const timerCapacidades = window.setInterval(() => void capacidades(), 15000);
+    return () => {
+      vigente = false;
+      window.clearInterval(timer);
+      window.clearInterval(timerCapacidades);
+    };
   }, [modelo]);
 
   // Temporizador para voz en vivo
@@ -226,10 +351,10 @@ export function PanelAsistenteIa({
     limpiarTimerSilencio();
     try {
       reconocimientoRef.current?.abort();
-    } catch { }
+    } catch {}
     try {
       if (grabadorRef.current?.state === 'recording') grabadorRef.current.stop();
-    } catch { }
+    } catch {}
     if (flujoRef.current) {
       flujoRef.current.getTracks().forEach((t) => t.stop());
       flujoRef.current = null;
@@ -242,10 +367,10 @@ export function PanelAsistenteIa({
     setEscuchandoVoz(false);
     try {
       reconocimientoRef.current?.stop();
-    } catch { }
+    } catch {}
     try {
       if (grabadorRef.current?.state === 'recording') grabadorRef.current.stop();
-    } catch { }
+    } catch {}
     if (flujoRef.current) {
       flujoRef.current.getTracks().forEach((t) => t.stop());
       flujoRef.current = null;
@@ -268,9 +393,8 @@ export function PanelAsistenteIa({
     const constructorReconocimiento =
       typeof window !== 'undefined'
         ? (((window as unknown as Record<string, unknown>).SpeechRecognition ??
-          (window as unknown as Record<string, unknown>).webkitSpeechRecognition) as
-          | (new () => any)
-          | undefined)
+            (window as unknown as Record<string, unknown>).webkitSpeechRecognition) as
+            (new () => any) | undefined)
         : undefined;
 
     // Capturar stream de audio de respaldo si está disponible
@@ -328,7 +452,9 @@ export function PanelAsistenteIa({
         rec.onerror = (e: any) => {
           console.warn('SpeechRecognition error:', e);
           if (!textoDictadoRef.current) {
-            setErrorVoz('No se pudo captar el audio con claridad. Puedes hablar de nuevo o escribir.');
+            setErrorVoz(
+              'No se pudo captar el audio con claridad. Puedes hablar de nuevo o escribir.',
+            );
           }
         };
 
@@ -343,7 +469,7 @@ export function PanelAsistenteIa({
             try {
               rec.start();
               return;
-            } catch { }
+            } catch {}
           }
           setEscuchandoVoz(false);
         };
@@ -436,7 +562,9 @@ export function PanelAsistenteIa({
     } else {
       mentoria.push('¿Qué le falta a este diagrama para ser adecuado?');
       if (lista.length >= 2) {
-        mentoria.push(`¿Cómo procedo con la relación entre ${lista[0].nombre} y ${lista[1].nombre}?`);
+        mentoria.push(
+          `¿Cómo procedo con la relación entre ${lista[0].nombre} y ${lista[1].nombre}?`,
+        );
       }
     }
     return [...mentoria, ...sugerenciasDeCambio()].slice(0, 5);
@@ -544,7 +672,12 @@ export function PanelAsistenteIa({
     audioBlobRef.current = null;
 
     try {
-      const entrada = reintento.current?.texto === texto ? reintento.current : { texto, clave: crypto.randomUUID() };
+      const entrada =
+        reintento.current?.texto === texto &&
+        reintento.current.intencion === intencion &&
+        reintento.current.voz === fuePorVoz
+          ? reintento.current
+          : { texto, clave: crypto.randomUUID(), intencion, voz: fuePorVoz };
       reintento.current = entrada;
       if (fuePorVoz) {
         // Envía la transcripción bajo modalidad VOZ para que se procese con la velocidad de texto
@@ -563,7 +696,8 @@ export function PanelAsistenteIa({
         {
           id: crypto.randomUUID(),
           emisor: 'ASISTENTE',
-          texto: (err as Error).message || 'Ocurrió un error al consultar el asistente inteligente.',
+          texto:
+            (err as Error).message || 'Ocurrió un error al consultar el asistente inteligente.',
           hora: horaActual(),
           error: true,
         },
@@ -685,8 +819,14 @@ export function PanelAsistenteIa({
 
   const sugerenciasDinamicas = obtenerSugerenciasDinamicas();
 
-  return (
-    <aside className="ia-agent-sidebar" aria-label="Asistente Inteligente de Modelado">
+  const panel = (
+    <aside
+      ref={panelRef}
+      className={'ia-agent-sidebar' + (ampliado ? ' is-expanded' : '')}
+      role={ampliado ? 'dialog' : undefined}
+      aria-modal={ampliado ? true : undefined}
+      aria-label="Asistente Inteligente de Modelado"
+    >
       {/* Cabecera del Agente */}
       <div className="ia-agent-header">
         <div className="ia-agent-title-row">
@@ -697,10 +837,37 @@ export function PanelAsistenteIa({
               <span className="ia-agent-dot" />
               <span>Chat compartido · Revisión {revision}</span>
             </div>
-            <small>{modoProveedor}</small>
+            <details className="ia-service-details">
+              <summary>Servicios de IA</summary>
+              <small>{modoProveedor}</small>
+              {modoImagen && <small>{modoImagen}</small>}
+            </details>
           </div>
         </div>
         <div className="ia-agent-header-actions">
+          <button
+            type="button"
+            className="ia-agent-icon-btn"
+            aria-label="Ver últimos mensajes"
+            title="Ver últimos mensajes"
+            onClick={() => {
+              const lista = listaRef.current;
+              if (lista) lista.scrollTop = lista.scrollHeight;
+            }}
+          >
+            ↓
+          </button>
+          <button
+            ref={ampliarRef}
+            type="button"
+            className="ia-agent-icon-btn"
+            aria-label={ampliado ? 'Reducir chat' : 'Ampliar chat'}
+            title={ampliado ? 'Reducir chat' : 'Ampliar chat'}
+            aria-expanded={ampliado}
+            onClick={alternarAmpliado}
+          >
+            ⤢
+          </button>
           <button
             type="button"
             className="ia-agent-icon-btn"
@@ -724,48 +891,108 @@ export function PanelAsistenteIa({
       {/* Lista de Mensajes del Chat */}
       <div
         className="ia-agent-messages"
+        role="log"
+        aria-label="Mensajes del asistente"
+        aria-live="off"
         style={{ overflowAnchor: 'none', minHeight: 0 }}
         ref={listaRef}
       >
         {errorChat && <p role="alert">No se pudo sincronizar el chat: {errorChat}</p>}
-        {acuerdos.length > 0 && <details className="ia-chat-bubble asistente">
-          <summary>Acuerdos del equipo ({acuerdos.filter(a => a.vigente).length} vigentes)</summary>
-          {acuerdos.map(a => <p key={a.id} style={{ opacity: a.vigente ? 1 : 0.55 }}>
-            {a.contenido} — {a.nombreAutor}{!a.vigente && ' (sustituido)'}
-            {a.vigente && !disabled && <button type="button" onClick={async () => {
-              const contenido = window.prompt('Nuevo acuerdo que sustituye al anterior:', a.contenido);
-              if (!contenido?.trim()) return;
-              try { setAcuerdos(await confirmarAcuerdo(modelo, a.idMensaje, contenido, a.id)); }
-              catch (e) { setErrorChat((e as Error).message); }
-            }}>Sustituir</button>}
-          </p>)}
-        </details>}
-        {ejecuciones.filter(e => e.estado === 'PENDIENTE' || e.estado === 'PROCESANDO').map(e => {
-          const autorEj = e.nombreAutor || 'Integrante';
-          const modEj = e.modalidad === 'VOZ' ? '🎙️ Voz' : e.modalidad === 'IMAGEN' ? '🖼️ Imagen' : '💬 Texto';
-          const textoEj = e.textoMensaje ? (e.textoMensaje.length > 60 ? e.textoMensaje.slice(0, 60) + '…' : e.textoMensaje) : '';
-          return (
-            <p key={e.id} role="status">
-              {e.estado === 'PENDIENTE' ? 'Solicitud en cola' : 'Preparando respuesta…'} · <b>{autorEj}</b> ({modEj}){textoEj ? `: «${textoEj}»` : ''}{' '}
-              <button type="button" disabled={disabled} onClick={async () => {
-                try { await cancelarEjecucion(modelo, e.id); await sincronizarChat.current(); }
-                catch (err) { setErrorChat((err as Error).message); }
-              }}>Cancelar</button>
-            </p>
-          );
-        })}
-        {ejecuciones.filter(e => e.estado === 'FALLIDO').map(e => (
-          <p key={e.id} role="alert">
-            {e.nombreAutor ? `${e.nombreAutor}: ` : ''}{e.error}
-          </p>
-        ))}
+        {acuerdos.length > 0 && (
+          <details className="ia-chat-bubble asistente">
+            <summary>
+              Acuerdos del equipo ({acuerdos.filter((a) => a.vigente).length} vigentes)
+            </summary>
+            {acuerdos.map((a) => (
+              <p key={a.id} style={{ opacity: a.vigente ? 1 : 0.55 }}>
+                {a.contenido} — {a.nombreAutor}
+                {!a.vigente && ' (sustituido)'}
+                {a.vigente && !disabled && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const contenido = window.prompt(
+                        'Nuevo acuerdo que sustituye al anterior:',
+                        a.contenido,
+                      );
+                      if (!contenido?.trim()) return;
+                      try {
+                        setAcuerdos(await confirmarAcuerdo(modelo, a.idMensaje, contenido, a.id));
+                      } catch (e) {
+                        setErrorChat((e as Error).message);
+                      }
+                    }}
+                  >
+                    Sustituir
+                  </button>
+                )}
+              </p>
+            ))}
+          </details>
+        )}
+        {ejecuciones
+          .filter((e) => e.estado === 'PENDIENTE' || e.estado === 'PROCESANDO')
+          .map((e) => {
+            const autorEj = e.nombreAutor || 'Integrante';
+            const modEj =
+              e.modalidad === 'VOZ'
+                ? '🎙️ Voz'
+                : e.modalidad === 'IMAGEN'
+                  ? '🖼️ Imagen'
+                  : '💬 Texto';
+            const textoEj = e.textoMensaje
+              ? e.textoMensaje.length > 60
+                ? e.textoMensaje.slice(0, 60) + '…'
+                : e.textoMensaje
+              : '';
+            return (
+              <p key={e.id} role="status">
+                {e.estado === 'PENDIENTE' ? 'Solicitud en cola' : 'Preparando respuesta…'} ·{' '}
+                <b>{autorEj}</b> ({modEj}){textoEj ? `: «${textoEj}»` : ''}{' '}
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={async () => {
+                    try {
+                      await cancelarEjecucion(modelo, e.id);
+                      await sincronizarChat.current();
+                    } catch (err) {
+                      setErrorChat((err as Error).message);
+                    }
+                  }}
+                >
+                  Cancelar
+                </button>
+              </p>
+            );
+          })}
+        {ejecuciones.some((e) => e.estado === 'FALLIDO') && (
+          <details className="ia-failed-jobs">
+            <summary>
+              {ejecuciones.filter((e) => e.estado === 'FALLIDO').length} solicitudes con error · Ver
+              detalles
+            </summary>
+            {ejecuciones
+              .filter((e) => e.estado === 'FALLIDO')
+              .map((e) => (
+                <p key={e.id} role="alert">
+                  {e.nombreAutor ? `${e.nombreAutor}: ` : ''}
+                  {e.error}
+                </p>
+              ))}
+          </details>
+        )}
         {mensajes.map((m) => (
           <div key={m.id} className={`ia-chat-bubble-wrapper ${m.emisor.toLowerCase()}`}>
             <div className="ia-chat-meta">
               <span className="ia-chat-author">
                 {m.emisor === 'USUARIO' ? (
-                  <>Consulta de <strong>{m.autor ?? 'Integrante'}</strong></>
-                ) : '✦ Agente IA'}
+                  <>
+                    Consulta de <strong>{m.autor ?? 'Integrante'}</strong>
+                  </>
+                ) : (
+                  '✦ Agente IA'
+                )}
                 {m.emisor === 'ASISTENTE' && m.respuestaANombre && (
                   <small style={{ marginLeft: '6px', opacity: 0.78, fontWeight: 400 }}>
                     ↪ para {m.respuestaANombre}
@@ -789,44 +1016,83 @@ export function PanelAsistenteIa({
               className={`ia-chat-bubble ${m.emisor.toLowerCase()}${m.error ? ' ia-chat-error' : ''}`}
             >
               <p className="ia-chat-text">{m.texto}</p>
-              {m.extraccion && <details><summary>{m.metodoEntrada === 'VOZ' ? 'Transcripción utilizada' : 'Lectura de la imagen (revisar inferencias)'}</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{m.extraccion}</pre></details>}
+              {m.extraccion && (
+                <details>
+                  <summary>
+                    {m.metodoEntrada === 'VOZ'
+                      ? 'Transcripción utilizada'
+                      : 'Lectura de la imagen (revisar inferencias)'}
+                  </summary>
+                  <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+                    {m.extraccion}
+                  </pre>
+                </details>
+              )}
               {!!m.supuestos?.length && <p>Supuestos: {m.supuestos.join('; ')}</p>}
-              {!!m.fuentes?.length && <details><summary>Fuentes del contexto ({m.fuentes.length})</summary>
-                {m.fuentes.map(f => <p key={f}>{acuerdos.find(a => a.id === f)?.contenido ?? mensajes.find(x => x.id === f)?.texto ?? f}</p>)}
-              </details>}
-              {m.emisor === 'USUARIO' && entradasChat.current.has(m.id) && !disabled &&
-                <button type="button" onClick={async () => {
-                  const contenido = window.prompt('Confirmar como acuerdo del equipo (puedes corregir el texto):', m.texto);
-                  if (!contenido?.trim()) return;
-                  try { setAcuerdos(await confirmarAcuerdo(modelo, m.id, contenido)); }
-                  catch (e) { setErrorChat((e as Error).message); }
-                }}>Confirmar acuerdo</button>}
+              {!!m.fuentes?.length && (
+                <details>
+                  <summary>Fuentes del contexto ({m.fuentes.length})</summary>
+                  {m.fuentes.map((f) => (
+                    <p key={f}>
+                      {acuerdos.find((a) => a.id === f)?.contenido ??
+                        mensajes.find((x) => x.id === f)?.texto ??
+                        f}
+                    </p>
+                  ))}
+                </details>
+              )}
+              {m.emisor === 'USUARIO' && entradasChat.current.has(m.id) && !disabled && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const contenido = window.prompt(
+                      'Confirmar como acuerdo del equipo (puedes corregir el texto):',
+                      m.texto,
+                    );
+                    if (!contenido?.trim()) return;
+                    try {
+                      setAcuerdos(await confirmarAcuerdo(modelo, m.id, contenido));
+                    } catch (e) {
+                      setErrorChat((e as Error).message);
+                    }
+                  }}
+                >
+                  Confirmar acuerdo
+                </button>
+              )}
 
               {m.audioUrl && (
                 <div className="ia-chat-audio-wrapper">
-                  <audio className="ia-chat-audio-player" controls src={m.audioUrl} preload="metadata" />
+                  <audio
+                    className="ia-chat-audio-player"
+                    controls
+                    src={m.audioUrl}
+                    preload="metadata"
+                  />
                 </div>
               )}
 
               {/* Tarjeta de bienvenida con sugerencias dinámicas contextuales si es el mensaje inicial */}
-              {m.id === 'bienvenida' && mensajes.length === 1 && sugerenciasDinamicas.length > 0 && (
-                <div className="ia-welcome-suggestions">
-                  <span className="ia-suggestions-label">💡 Ideas para este modelo:</span>
-                  <div className="ia-suggestions-chips">
-                    {sugerenciasDinamicas.map((sug) => (
-                      <button
-                        key={sug}
-                        type="button"
-                        className="ia-suggestion-chip"
-                        disabled={enviando || disabled}
-                        onClick={() => void enviar(sug)}
-                      >
-                        ✦ {sug}
-                      </button>
-                    ))}
+              {m.id === 'bienvenida' &&
+                mensajes.length === 1 &&
+                sugerenciasDinamicas.length > 0 && (
+                  <div className="ia-welcome-suggestions">
+                    <span className="ia-suggestions-label">💡 Ideas para este modelo:</span>
+                    <div className="ia-suggestions-chips">
+                      {sugerenciasDinamicas.map((sug) => (
+                        <button
+                          key={sug}
+                          type="button"
+                          className="ia-suggestion-chip"
+                          disabled={enviando || disabled}
+                          onClick={() => void enviar(sug)}
+                        >
+                          ✦ {sug}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
 
               {/* Tarjeta de cambios detectados / propuesta embebida */}
               {m.propuesta && (
@@ -838,9 +1104,7 @@ export function PanelAsistenteIa({
                         <span className="ia-proposal-title">
                           Cambios detectados ({m.propuesta.operaciones.length})
                         </span>
-                        <span className="ia-inline-confidence-badge">
-                          Requiere revisión
-                        </span>
+                        <span className="ia-inline-confidence-badge">Requiere revisión</span>
                       </div>
                       <p className="ia-inline-proposal-summary">{m.propuesta.resumen}</p>
                     </div>
@@ -871,13 +1135,15 @@ export function PanelAsistenteIa({
                   {/* Lista de operaciones rediseñada y visualmente limpia */}
                   <div className="ia-inline-operations-list">
                     {m.propuesta.operaciones.map((op) => {
-                      const seleccionada =
-                        m.operacionesSeleccionadas?.[op.id] ?? op.seleccionada;
+                      const seleccionada = m.operacionesSeleccionadas?.[op.id] ?? op.seleccionada;
                       const esPendiente = m.estadoPropuesta === 'PENDIENTE';
                       const val = op.valorPropuesto ?? op.valorActual ?? {};
                       const nombreEntidad = typeof val.nombre === 'string' ? val.nombre : '';
                       const tipoUml = typeof val.tipoUml === 'string' ? val.tipoUml : '';
-                      const nombrePadre = resolverNombreClase(val.idClase, m.propuesta ?? undefined);
+                      const nombrePadre = resolverNombreClase(
+                        val.idClase,
+                        m.propuesta ?? undefined,
+                      );
 
                       return (
                         <div
@@ -903,9 +1169,7 @@ export function PanelAsistenteIa({
                                 {ETIQUETAS_ENTIDAD[op.tipoEntidad] ?? op.tipoEntidad}
                               </span>
                             </label>
-                            <span className="ia-op-confidence">
-                              Heurística
-                            </span>
+                            <span className="ia-op-confidence">Heurística</span>
                           </div>
 
                           <div className="ia-op-card-content">
@@ -933,7 +1197,8 @@ export function PanelAsistenteIa({
                                 <div className="ia-op-highlight">
                                   <span className="ia-op-symbol">↔</span>
                                   <b className="ia-op-name">
-                                    {String(val.origen || 'Origen')} ➔ {String(val.destino || 'Destino')}
+                                    {String(val.origen || 'Origen')} ➔{' '}
+                                    {String(val.destino || 'Destino')}
                                   </b>
                                   <span className="ia-type-tag">
                                     {String(val.tipo || 'ASOCIACION')}
@@ -997,19 +1262,16 @@ export function PanelAsistenteIa({
                             )
                           }
                           onClick={() =>
-                            aplicar(
-                              m.id,
-                              m.propuesta!,
-                              m.operacionesSeleccionadas ?? {},
-                            )
+                            aplicar(m.id, m.propuesta!, m.operacionesSeleccionadas ?? {})
                           }
                         >
                           {procesandoPropuesta === m.id
                             ? 'Aplicando…'
-                            : `✓ Aplicar cambios (${m.propuesta.operaciones.filter(
-                              (o) => m.operacionesSeleccionadas?.[o.id] ?? o.seleccionada,
-                            ).length
-                            })`}
+                            : `✓ Aplicar cambios (${
+                                m.propuesta.operaciones.filter(
+                                  (o) => m.operacionesSeleccionadas?.[o.id] ?? o.seleccionada,
+                                ).length
+                              })`}
                         </button>
                       </>
                     ) : m.estadoPropuesta === 'APLICADA' ? (
@@ -1017,9 +1279,7 @@ export function PanelAsistenteIa({
                         ✓ Propuesta aplicada al modelo
                       </span>
                     ) : (
-                      <span className="ia-inline-state-badge rejected">
-                        ✕ Propuesta descartada
-                      </span>
+                      <span className="ia-inline-state-badge rejected">✕ Propuesta descartada</span>
                     )}
                   </div>
                 </div>
@@ -1045,21 +1305,12 @@ export function PanelAsistenteIa({
         )}
       </div>
 
-      <button type="button" onClick={() => {
-        const lista = listaRef.current;
-        if (lista) lista.scrollTop = lista.scrollHeight;
-      }}>↓ Ver últimos mensajes</button>
-
       {/* Menú flotante de ideas desplegable (opcional bajo demanda, no ocupa espacio fijo) */}
       {verIdeas && (
         <div className="ia-ideas-popover">
           <div className="ia-ideas-popover-header">
             <span className="ia-ideas-title">💡 Sugerencias contextuales</span>
-            <button
-              type="button"
-              className="ia-ideas-close"
-              onClick={() => setVerIdeas(false)}
-            >
+            <button type="button" className="ia-ideas-close" onClick={() => setVerIdeas(false)}>
               ×
             </button>
           </div>
@@ -1112,14 +1363,23 @@ export function PanelAsistenteIa({
             <div className="ia-voice-compact-status">
               <span className="ia-voice-pulse-dot live" />
               <span className="ia-voice-compact-text">
-                Escuchando ({Math.floor(segundosVoz / 60)}:{(segundosVoz % 60).toString().padStart(2, '0')}) ·{' '}
+                Escuchando ({Math.floor(segundosVoz / 60)}:
+                {(segundosVoz % 60).toString().padStart(2, '0')}) ·{' '}
                 {prompt.trim()
                   ? `🗣️ «${prompt.trim()}» (se enviará al terminar de hablar…)`
                   : 'Habla ahora; al terminar se enviará automáticamente'}
               </span>
             </div>
             <div className="ia-voice-compact-actions">
-              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', cursor: 'pointer' }}>
+              <label
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  fontSize: '0.75rem',
+                  cursor: 'pointer',
+                }}
+              >
                 <input
                   type="checkbox"
                   checked={autoEnviarVoz}
@@ -1170,9 +1430,19 @@ export function PanelAsistenteIa({
         )}
 
         {/* Textarea nativo donde se escribe el texto en tiempo real */}
-        <label>Intención <select aria-label="Intención del mensaje" value={intencion} onChange={e => setIntencion(e.target.value)} disabled={enviando || disabled}>
-          <option value="AUTO">Automática</option><option value="CONSULTAR">Consultar sin cambios</option><option value="MODIFICAR">Proponer cambios</option>
-        </select></label>
+        <label className="ia-input-mode">
+          Intención{' '}
+          <select
+            aria-label="Intención del mensaje"
+            value={intencion}
+            onChange={(e) => setIntencion(e.target.value)}
+            disabled={enviando || disabled}
+          >
+            <option value="AUTO">Automática</option>
+            <option value="CONSULTAR">Consultar sin cambios</option>
+            <option value="MODIFICAR">Proponer cambios</option>
+          </select>
+        </label>
         <textarea
           ref={inputRef}
           aria-label="Mensaje al asistente"
@@ -1185,7 +1455,7 @@ export function PanelAsistenteIa({
               ? 'Escuchando tu voz... Lo que hables se escribirá aquí en tiempo real.'
               : contextoClase
                 ? `Pregunta o pide un cambio sobre ${contextoClase}...`
-                : 'Pregunta (¿qué le falta a este diagrama?) o pide un cambio (agrega la clase Cliente con nombre y correo)...'
+                : 'Escribe una consulta o pide un cambio en el modelo…'
           }
           onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={manejarKeyDown}
@@ -1206,7 +1476,9 @@ export function PanelAsistenteIa({
             <button
               type="button"
               className={`ia-tool-btn ia-tool-btn-voice ${escuchandoVoz ? 'live' : ''}`}
-              title={escuchandoVoz ? 'Detener dictado de voz' : 'Hablar o dictar instrucción por voz'}
+              title={
+                escuchandoVoz ? 'Detener dictado de voz' : 'Hablar o dictar instrucción por voz'
+              }
               onClick={alternarVoz}
               disabled={disabled || enviando}
             >
@@ -1217,7 +1489,10 @@ export function PanelAsistenteIa({
               type="button"
               className="ia-tool-btn"
               title="Imagen"
-              onClick={abrirImagen}
+              onClick={() => {
+                setAmpliado(false);
+                abrirImagen();
+              }}
               disabled={disabled}
             >
               📷 Imagen
@@ -1235,4 +1510,7 @@ export function PanelAsistenteIa({
       </form>
     </aside>
   );
+  return ampliado
+    ? createPortal(<div className="ia-chat-expanded-backdrop">{panel}</div>, document.body)
+    : panel;
 }

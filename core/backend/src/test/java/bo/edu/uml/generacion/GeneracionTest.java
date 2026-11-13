@@ -18,6 +18,20 @@ import java.util.zip.ZipInputStream;
 /** Pruebas unitarias del motor de generación Spring Boot sin depender de Spring ni PostgreSQL. */
 class GeneracionTest {
 
+    @Test
+    void identificadorTecnicoNoDuplicaUnAtributoIdDelModelo() throws Exception {
+        String c = UUID.randomUUID().toString();
+        var clases = List.of(clase(c, "Cliente", true));
+        var atributos = List.of(
+                atributo(UUID.randomUUID().toString(), c, "id", "String", false, false),
+                atributo(UUID.randomUUID().toString(), c, "idBackend", "String", false, false));
+        var archivos = leerZip(motor.generar("bo.test", "ejemplo", "1.0.0", "bo.test", clases, atributos, List.of()));
+        assertThat(archivos.get("ejemplo/src/main/java/bo/test/modelo/Cliente.java"))
+                .contains("private Long idBackend2;", "private String id;", "private String idBackend;");
+        assertThat(archivos.get("ejemplo/src/main/resources/schema.sql"))
+                .contains("id_backend2 BIGSERIAL PRIMARY KEY", "id VARCHAR(255)", "id_backend VARCHAR(255)");
+    }
+
     private final MotorGeneracionSpringBoot motor = new MotorGeneracionSpringBoot();
 
     private Map<String, Object> clase(String id, String nombre, boolean persistente) {

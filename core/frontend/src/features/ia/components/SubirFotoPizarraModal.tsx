@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react';
-import { solicitarImagen } from '../api/iaApi';
+import {
+  solicitarImagen,
+  leerCapacidadesAgente,
+  ErrorEjecucionIa,
+  type CapacidadIa,
+} from '../api/iaApi';
 
 const TIPOS = ['image/png', 'image/jpeg'];
 
@@ -25,6 +30,24 @@ export function SubirFotoPizarraModal({
   const [mensajeProgreso, setMensajeProgreso] = useState('');
   const [error, setError] = useState('');
   const entrada = useRef<HTMLInputElement | null>(null);
+  const claveSolicitud = useRef(crypto.randomUUID());
+  const [capacidad, setCapacidad] = useState<CapacidadIa | null>(null);
+
+  useEffect(() => {
+    claveSolicitud.current = crypto.randomUUID();
+  }, [archivo, rotacion, realzarContraste, tipoOrigen, modoAccion, textoDetectado]);
+
+  useEffect(() => {
+    let activo = true;
+    void leerCapacidadesAgente(modelo)
+      .then((c) => {
+        if (activo) setCapacidad(c.imagen ?? null);
+      })
+      .catch(() => {});
+    return () => {
+      activo = false;
+    };
+  }, [modelo]);
 
   useEffect(
     () => () => {
@@ -38,6 +61,10 @@ export function SubirFotoPizarraModal({
     if (!nuevo) return;
     if (!TIPOS.includes(nuevo.type)) {
       setError('Selecciona una imagen PNG o JPG.');
+      return;
+    }
+    if (!nuevo.size || nuevo.size > 16 * 1024 * 1024) {
+      setError('Selecciona una imagen con contenido de hasta 16 MB.');
       return;
     }
     if (vista) URL.revokeObjectURL(vista);
@@ -69,14 +96,24 @@ export function SubirFotoPizarraModal({
     deg: number,
     filtrar: boolean,
   ): Promise<File> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const img = new Image();
+      const temporal = URL.createObjectURL(file);
       img.onload = () => {
+        URL.revokeObjectURL(temporal);
+        if (img.width > 12000 || img.height > 12000 || img.width * img.height > 40000000) {
+          reject(
+            new Error(
+              'La imagen es demasiado grande. Recórtala o reduce su resolución antes de enviarla.',
+            ),
+          );
+          return;
+        }
         const swap = deg === 90 || deg === 270;
         const origW = swap ? img.height : img.width;
         const origH = swap ? img.width : img.height;
 
-        // Limitar dimensiones máximas a 1400px para que el envío y el análisis en IA sea ultra rápido (pasa de varios MB a ~200 KB)
+        // Reducir tamaño conservando legibilidad del diagrama.
         const MAX_DIM = 2560;
         let scale = 1;
         if (origW > MAX_DIM || origH > MAX_DIM) {
@@ -90,7 +127,12 @@ export function SubirFotoPizarraModal({
         canvas.width = targetW;
         canvas.height = targetH;
         const ctx = canvas.getContext('2d');
-        if (!ctx) return resolve(file);
+        if (!ctx)
+          return reject(
+            new Error('El navegador no pudo preparar la imagen. Vuelve a seleccionarla.'),
+          );
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, targetW, targetH);
 
         ctx.translate(canvas.width / 2, canvas.height / 2);
         ctx.rotate((deg * Math.PI) / 180);
@@ -102,18 +144,22 @@ export function SubirFotoPizarraModal({
         const drawH = Math.round(img.height * scale);
         ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
 
-        // Convertir siempre a JPEG optimizado (calidad 85%): reduce el tiempo de análisis hasta 10 veces
+        // Fondo blanco para conservar la transparencia al convertir a JPEG.
         canvas.toBlob(
           (blob) => {
-            if (!blob) return resolve(file);
+            if (!blob)
+              return reject(new Error('No se pudo preparar la imagen. Intenta con otra foto.'));
             resolve(new File([blob], 'diagrama_optimizado.jpg', { type: 'image/jpeg' }));
           },
           'image/jpeg',
           0.85,
         );
       };
-      img.onerror = () => resolve(file);
-      img.src = URL.createObjectURL(file);
+      img.onerror = () => {
+        URL.revokeObjectURL(temporal);
+        reject(new Error('No se pudo leer la imagen seleccionada.'));
+      };
+      img.src = temporal;
     });
   }
 
@@ -121,20 +167,16 @@ export function SubirFotoPizarraModal({
     if (!archivo || enviando) return;
     setEnviando(true);
     setError('');
-    setMensajeProgreso('Orientando y preparando imagen...');
-
-    const timer1 = setTimeout(() => {
-      setMensajeProgreso('Reconociendo cajas de clases, atributos y métodos...');
-    }, 1800);
-    const timer2 = setTimeout(() => {
-      setMensajeProgreso('Analizando flechas de herencia, relaciones y multiplicidades...');
-    }, 4500);
+    setMensajeProgreso('Preparando la imagen…');
 
     try {
       const archivoFinal = await prepararArchivoRotadoYFiltrado(
         archivo,
         rotacion,
         realzarContraste,
+      );
+      setMensajeProgreso(
+        'Solicitud en curso en el servidor. El resultado se guardará en el chat compartido…',
       );
 
       const etiquetasOrigen: Record<TipoOrigenImagen, string> = {
@@ -157,12 +199,20 @@ export function SubirFotoPizarraModal({
       if (textoDetectado.trim()) {
         partesGuia.push(textoDetectado.trim());
       } else if (modoAccion === 'CONSULTAR') {
-        partesGuia.push('¿Qué observas en esta imagen y qué le faltaría para ser un modelo UML adecuado?');
+        partesGuia.push(
+          '¿Qué observas en esta imagen y qué le faltaría para ser un modelo UML adecuado?',
+        );
       }
       const guiaFinal = partesGuia.join('\n');
       const intencionImagen = modoAccion === 'CONSULTAR' ? 'CONSULTAR' : 'MODIFICAR';
 
-      const resultado = await solicitarImagen(modelo, archivoFinal, guiaFinal, intencionImagen);
+      const resultado = await solicitarImagen(
+        modelo,
+        archivoFinal,
+        guiaFinal,
+        intencionImagen,
+        claveSolicitud.current,
+      );
       if (resultado.idPropuesta) {
         setMensajeProgreso('Propuesta generada. Abriendo visor de revisión...');
         await alGenerar(resultado.idPropuesta);
@@ -175,10 +225,9 @@ export function SubirFotoPizarraModal({
       }
       throw new Error(resultado.mensaje);
     } catch (e) {
+      if (e instanceof ErrorEjecucionIa) claveSolicitud.current = crypto.randomUUID();
       setError((e as Error).message);
     } finally {
-      clearTimeout(timer1);
-      clearTimeout(timer2);
       setEnviando(false);
       setMensajeProgreso('');
     }
@@ -186,14 +235,26 @@ export function SubirFotoPizarraModal({
 
   return (
     <div className="dialog-backdrop" role="presentation">
-      <section className="dialog dialog-wide" role="dialog" aria-modal="true">
+      <section
+        className="dialog dialog-wide"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="imagen-ia-titulo"
+      >
         <div className="dialog-header">
-          <h2>Reconstruir o actualizar desde imagen / pizarra / papel</h2>
+          <h2 id="imagen-ia-titulo">Reconstruir o actualizar desde imagen / pizarra / papel</h2>
           <button className="dialog-close" aria-label="Cerrar carga de foto" onClick={cerrar}>
             ×
           </button>
         </div>
         <div className="dialog-body">
+          {capacidad && (
+            <p className="workflow-summary" role="status">
+              {capacidad.configurado
+                ? `Análisis de imágenes: ${capacidad.proveedor} · ${capacidad.modelo}${capacidad.estado === 'EN_PAUSA' ? ' · en pausa por cuota; espera antes de reintentar' : ''}`
+                : 'Análisis de imágenes sin configurar. Habilítalo en Administración → Servicios.'}
+            </p>
+          )}
           <p className="dialog-desc">
             Sube fotos de bocetos a mano en papel o libreta, dibujos en pizarra acrílica o capturas
             digitales de Enterprise Architect / CASE. El sistema reconocerá automáticamente clases,
@@ -250,8 +311,8 @@ export function SubirFotoPizarraModal({
               {tipoOrigen === 'PAPEL' && (
                 <span>
                   <b>📝 Modo Cuaderno / Papel:</b> Optimizado para lápiz o bolígrafo sobre hojas
-                  cuadriculadas o rayadas. Normaliza tipos de datos SQL (VARCHAR, INT, DECIMAL) a UML
-                  y sintetiza claves foráneas manuscritas (cliente_id).
+                  cuadriculadas o rayadas. Normaliza tipos de datos SQL (VARCHAR, INT, DECIMAL) a
+                  UML y sintetiza claves foráneas manuscritas (cliente_id).
                 </span>
               )}
               {tipoOrigen === 'PIZARRA' && (
@@ -262,8 +323,8 @@ export function SubirFotoPizarraModal({
               )}
               {tipoOrigen === 'DIGITAL' && (
                 <span>
-                  <b>💻 Modo Digital / CASE:</b> Lee estereotipos de Enterprise Architect
-                  («entity», «interface»), visibilidades exactas (+, -, #, ~) y multiplicidades.
+                  <b>💻 Modo Digital / CASE:</b> Lee estereotipos de Enterprise Architect («entity»,
+                  «interface»), visibilidades exactas (+, -, #, ~) y multiplicidades.
                 </span>
               )}
             </div>
@@ -300,7 +361,9 @@ export function SubirFotoPizarraModal({
             ) : (
               <span className="ia-dropzone-empty">
                 <b>Arrastra un boceto en papel, foto de pizarra o diagrama aquí</b>
-                <small>o haz clic para seleccionar · PNG/JPG · optimización automática de fotos</small>
+                <small>
+                  o haz clic para seleccionar · PNG/JPG · optimización automática de fotos
+                </small>
               </span>
             )}
           </button>
@@ -378,8 +441,8 @@ export function SubirFotoPizarraModal({
                 disabled={enviando}
               />
               <span>
-                <b>Crear como nuevo modelo:</b> Tratará todos los elementos como un diseño
-                independiente.
+                <b>Proponer diseño independiente:</b> Genera una propuesta revisable en este modelo.
+                No crea otro proyecto ni aplica cambios automáticamente.
               </span>
             </label>
             <label>
@@ -398,14 +461,18 @@ export function SubirFotoPizarraModal({
           </div>
 
           <details className="ia-detected-text">
-            <summary>¿Deseas guiar el análisis, hacer una consulta o tienes texto detectado? (Opcional)</summary>
+            <summary>
+              ¿Deseas guiar el análisis, hacer una consulta o tienes texto detectado? (Opcional)
+            </summary>
             <p>
-              Opcional. Puedes escribir una pregunta de diseño sobre la imagen (ej.: «¿qué le falta a
-              este diagrama?») o indicar instrucciones adicionales si alguna parte es poco legible.
+              Opcional. Puedes escribir una pregunta de diseño sobre la imagen (ej.: «¿qué le falta
+              a este diagrama?») o indicar instrucciones adicionales si alguna parte es poco
+              legible.
             </p>
             <textarea
               rows={3}
               maxLength={12000}
+              disabled={enviando}
               value={textoDetectado}
               onChange={(e) => setTextoDetectado(e.target.value)}
               placeholder="Ej.: ¿Qué le faltaría a este diagrama? o Clase Factura con id: Long y monto: BigDecimal"

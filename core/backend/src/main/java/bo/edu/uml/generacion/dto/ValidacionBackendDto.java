@@ -31,7 +31,12 @@ public final class ValidacionBackendDto {
             String sha256,
             String registroCompilacion,
             List<Hallazgo> hallazgos,
-            boolean puedeDescargar) {}
+            boolean puedeDescargar) {
+        public Informe conDescarga(boolean disponible) {
+            return new Informe(id, idGeneracion, estado, comprobacionesAprobadas, cantidadAdvertencias,
+                    cantidadErrores, iniciadoEn, completadoEn, sha256, registroCompilacion, hallazgos, disponible);
+        }
+    }
 
     public record GeneracionDisponible(
             UUID idGeneracion,

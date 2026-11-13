@@ -18,7 +18,13 @@ export type Informe = {
   advertencias?: number;
   hallazgos: Hallazgo[];
 };
-export const solicitar = (modelo: string) =>
-  api<{ id: string; revision: number }>('/modelos/' + modelo + '/validaciones', { method: 'POST' });
+export const solicitar = (modelo: string, version?: string) =>
+  api<{ id: string; revision: number }>(
+    '/modelos/' +
+      modelo +
+      '/validaciones' +
+      (version ? '?version=' + encodeURIComponent(version) : ''),
+    { method: 'POST' },
+  );
 export const informe = (modelo: string, id?: string) =>
   api<Informe>('/modelos/' + modelo + '/validaciones' + (id ? '/' + id : ''));

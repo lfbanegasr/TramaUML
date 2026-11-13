@@ -3943,6 +3943,59 @@ class NucleoIntegracionTest {
   }
 
   @Test
+  void versionHistoricaSeValidaYRegeneraSinRestaurarNiPerderLaDescargaAnterior() throws Exception {
+    var actor = login(usuario, clave);
+    String modelo = proyecto(actor).path("idModelo").asText();
+    UUID cliente = UUID.randomUUID();
+    enviar(actor, modelo, cambio(1, UUID.randomUUID(), clase(cliente, "ClienteHistorico"),
+        Map.of("operacion", "CREAR", "entidad", "ATRIBUTO", "idEntidad", UUID.randomUUID(),
+            "datos", Map.of("idClase", cliente, "nombre", "id", "tipoUml", "UUID", "esIdentificador", true))))
+        .andExpect(status().isOk());
+    String ruta = "/api/modelos/" + modelo;
+    var vista = respuesta(mvc.perform(autorizado(get(ruta + "/generacion/configuracion"), actor))
+        .andExpect(status().isOk()));
+    String version = vista.path("idVersionModelo").asText();
+    enviar(actor, modelo, cambio(2, UUID.randomUUID(), clase(UUID.randomUUID(), "SoloEnVersionActual")))
+        .andExpect(status().isOk());
+
+    var tarea = respuesta(escribir(actor, post(ruta + "/validaciones?version=" + version), Map.of())
+        .andExpect(status().isAccepted()).andExpect(jsonPath("$.revision").value(2)));
+    procesadorValidacion.procesar(UUID.fromString(tarea.path("id").asText()));
+    mvc.perform(autorizado(get(ruta + "/generacion/configuracion?version=" + version), actor))
+        .andExpect(status().isOk()).andExpect(jsonPath("$.versionActual").value(false))
+        .andExpect(jsonPath("$.estadoVersion", Matchers.startsWith("VALIDO")));
+
+    var cuerpo = json.createObjectNode();
+    for (String campo : List.of("idVersionModelo", "nombre", "nombreProyecto", "idGrupo", "idArtefacto",
+        "paqueteBase", "versionInicial", "generarRepositorios", "generarServicios", "generarControladores",
+        "generarDtos", "exponerRest")) cuerpo.set(campo, vista.get(campo));
+    var cfg = respuesta(escribir(actor, put(ruta + "/generacion/configuracion"), cuerpo)
+        .andExpect(status().isOk()).andExpect(jsonPath("$.puedeGenerar").value(true)));
+    var primera = respuesta(escribir(actor, post(ruta + "/generacion/generar"),
+        Map.of("idConfiguracion", cfg.path("id").asText())).andExpect(status().isOk()));
+    String generacion = primera.path("idGeneracion").asText();
+    completarValidacionBackend(actor, modelo, generacion);
+
+    var segunda = respuesta(escribir(actor, post(ruta + "/generacion/generar"),
+        Map.of("idConfiguracion", cfg.path("id").asText())).andExpect(status().isOk())
+        .andExpect(jsonPath("$.idVersionModelo").value(version)).andExpect(jsonPath("$.totalClases").value(1)));
+    assertThat(segunda.path("idGeneracion").asText()).isNotEqualTo(generacion);
+    var descarga = mvc.perform(autorizado(get(ruta + "/generacion/" + generacion + "/descargar"), actor))
+        .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray();
+    StringBuilder nombres = new StringBuilder();
+    try (var zip = new ZipInputStream(new ByteArrayInputStream(descarga))) {
+      ZipEntry entrada;
+      while ((entrada = zip.getNextEntry()) != null) nombres.append(entrada.getName()).append('\n');
+    }
+    assertThat(nombres.toString()).contains("ClienteHistorico.java").doesNotContain("SoloEnVersionActual.java");
+    mvc.perform(autorizado(get(ruta), actor)).andExpect(status().isOk())
+        .andExpect(jsonPath("$.revision").value(3)).andExpect(jsonPath("$.clases.length()").value(2));
+    String otro = proyecto(actor).path("idModelo").asText();
+    escribir(actor, post("/api/modelos/" + otro + "/validaciones?version=" + version), Map.of())
+        .andExpect(status().isNotFound());
+  }
+
+  @Test
   void configuracionYGeneracionBackendYDescarga() throws Exception {
     var c = login(usuario, clave);
     var p = proyecto(c);
@@ -4014,16 +4067,16 @@ class NucleoIntegracionTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.idGrupo").value("bo.edu.uml"))
                 .andExpect(jsonPath("$.paqueteBase").value("bo.edu.uml.academico"))
-                .andExpect(jsonPath("$.puedeGenerar").value(false))
+                .andExpect(jsonPath("$.puedeGenerar").value(true))
                 .andExpect(jsonPath("$.mapeosTipo").isNotEmpty())
                 .andExpect(jsonPath("$.dependencias").isNotEmpty()));
 
-    // La configuración no suplanta la validación semántica de la versión.
+    // Generar no exige validación semántica previa del UML.
     escribir(
             c,
             post("/api/modelos/" + modelo + "/generacion/generar"),
             Map.of("idConfiguracion", configuracion.get("id").asText()))
-        .andExpect(status().isUnprocessableEntity());
+        .andExpect(status().isOk());
     assertThat(validar(c, modelo).get("estado").asText()).isIn("VALIDO", "VALIDO_CON_ADVERTENCIAS");
 
     // 3. Generar backend Spring Boot en ZIP
@@ -4061,6 +4114,58 @@ class NucleoIntegracionTest {
     // Magic bytes del formato ZIP: PK\x03\x04
     assertThat(bytes[0]).isEqualTo((byte) 0x50);
     assertThat(bytes[1]).isEqualTo((byte) 0x4B);
+  }
+
+  @Test
+  void guardarMismoNombreGenerarSinValidarYDescargarDuranteRevalidacion() throws Exception {
+    var actor = login(usuario, clave);
+    String modelo = proyecto(actor).path("idModelo").asText();
+    UUID claseId = UUID.randomUUID();
+    enviar(actor, modelo, cambio(1, UUID.randomUUID(), clase(claseId, "SinValidacion"),
+        Map.of("operacion", "CREAR", "entidad", "ATRIBUTO", "idEntidad", UUID.randomUUID(),
+            "datos", Map.of("idClase", claseId, "nombre", "nombre", "tipoUml", "String"))))
+        .andExpect(status().isOk());
+    String ruta = "/api/modelos/" + modelo;
+    var vista = respuesta(mvc.perform(autorizado(get(ruta + "/generacion/configuracion"), actor))
+        .andExpect(status().isOk()));
+    var cuerpo = json.createObjectNode();
+    for (String campo : List.of("idVersionModelo", "nombre", "nombreProyecto", "idGrupo", "idArtefacto",
+        "paqueteBase", "versionInicial", "generarRepositorios", "generarServicios", "generarControladores",
+        "generarDtos", "exponerRest")) cuerpo.set(campo, vista.get(campo));
+    cuerpo.set("clases", json.valueToTree(List.of(Map.of("idClase", claseId, "seleccionada", true,
+        "esPersistente", true, "exponerRest", true))));
+    var primera = respuesta(escribir(actor, put(ruta + "/generacion/configuracion"), cuerpo)
+        .andExpect(status().isOk()).andExpect(jsonPath("$.estadoVersion").value("SIN_VALIDAR"))
+        .andExpect(jsonPath("$.puedeGenerar").value(true)));
+    var segunda = respuesta(escribir(actor, put(ruta + "/generacion/configuracion"), cuerpo)
+        .andExpect(status().isOk()).andExpect(jsonPath("$.puedeGenerar").value(true)));
+    assertThat(segunda.path("id").asText()).isNotEqualTo(primera.path("id").asText());
+    assertThat(jdbc.queryForObject("select estado from uml_colaborativo.configuracion_generacion_backend where id=?",
+        String.class, UUID.fromString(primera.path("id").asText()))).isEqualTo("VALIDO");
+    var generada = respuesta(escribir(actor, post(ruta + "/generacion/generar"),
+        Map.of("idConfiguracion", primera.path("id").asText())).andExpect(status().isOk()));
+    escribir(actor, post(ruta + "/generacion/generar"), Map.of("idConfiguracion", segunda.path("id").asText()))
+        .andExpect(status().isOk());
+    assertThat(jdbc.queryForObject("select count(*) from uml_colaborativo.validacion_modelo where id_modelo=?",
+        Integer.class, UUID.fromString(modelo))).isZero();
+    String generacion = generada.path("idGeneracion").asText();
+    completarValidacionBackend(actor, modelo, generacion);
+    var tarea = respuesta(escribir(actor, post(ruta + "/generacion/" + generacion + "/validaciones"), Map.of())
+        .andExpect(status().isAccepted()).andExpect(jsonPath("$.puedeDescargar").value(true)));
+    mvc.perform(autorizado(get(ruta + "/generacion/" + generacion + "/descargar"), actor)).andExpect(status().isOk());
+    // Un fallo de infraestructura posterior no revoca la aprobación del mismo contenido.
+    jdbc.update("update uml_colaborativo.validacion_backend set estado='FALLIDO',completado_en=clock_timestamp() where id=?",
+        UUID.fromString(tarea.path("id").asText()));
+    mvc.perform(autorizado(get(ruta + "/generacion/" + generacion + "/validacion"), actor))
+        .andExpect(status().isOk()).andExpect(jsonPath("$.estado").value("FALLIDO"))
+        .andExpect(jsonPath("$.puedeDescargar").value(true));
+    mvc.perform(autorizado(get(ruta + "/generacion/" + generacion + "/descargar"), actor)).andExpect(status().isOk());
+    var listado = respuesta(mvc.perform(autorizado(get(ruta + "/generacion"), actor)).andExpect(status().isOk()));
+    assertThat(java.util.stream.StreamSupport.stream(listado.spliterator(), false)
+        .filter(g -> generacion.equals(g.path("idGeneracion").asText())).findFirst().orElseThrow()
+        .path("validacion").path("puedeDescargar").asBoolean()).isTrue();
+    mvc.perform(autorizado(get(ruta), actor)).andExpect(status().isOk())
+        .andExpect(jsonPath("$.atributos.length()").value(1));
   }
 
   @Test
@@ -4386,11 +4491,11 @@ class NucleoIntegracionTest {
                 UUID.fromString(gen)))
         .isEqualTo(1);
 
-    // Revalidar bloquea una aprobación anterior hasta que termine el nuevo intento.
+    // Revalidar conserva la aprobación del mismo ZIP mientras el contenido no cambie.
     var revalidacion =
         respuesta(
             escribir(c, post(ruta + "/validaciones"), Map.of()).andExpect(status().isAccepted()));
-    mvc.perform(autorizado(get(ruta + "/descargar"), c)).andExpect(status().isConflict());
+    mvc.perform(autorizado(get(ruta + "/descargar"), c)).andExpect(status().isOk());
     UUID archivo = UUID.fromString(generada.get("idArchivoSalida").asText());
     byte[] original =
         jdbc.queryForObject(
@@ -4445,7 +4550,7 @@ class NucleoIntegracionTest {
                     + " id_generacion=?",
                 Integer.class,
                 UUID.fromString(gen)))
-        .isEqualTo(1);
+        .isEqualTo(2);
   }
 
   @Test

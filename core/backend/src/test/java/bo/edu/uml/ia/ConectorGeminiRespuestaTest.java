@@ -16,6 +16,52 @@ import org.springframework.web.client.RestClient;
 
 class ConectorGeminiRespuestaTest {
   @Test
+  void cuotaDeImagenSePausaSinRepetirLlamadasNiExponerSecretos() throws Exception {
+    var llamadas = new java.util.concurrent.atomic.AtomicInteger();
+    var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext("/vision", exchange -> {
+      llamadas.incrementAndGet();
+      exchange.getRequestBody().readAllBytes();
+      exchange.sendResponseHeaders(429, -1);
+      exchange.close();
+    });
+    server.start();
+    try {
+      String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/vision";
+      var connector = new ConectorIaRemoto(RestClient.builder(), new ObjectMapper(),
+          mock(ResolverServicioActivo.class), "GEMINI", "secreto-no-publico", url, url, "",
+          "gemini-3.8-flash", "gemini-3.8-flash", "");
+      assertThatThrownBy(() -> connector.reconocerDiagrama(new byte[] {1}, "image/png"))
+          .isInstanceOf(ApiException.class).hasMessageContaining("cuota");
+      assertThatThrownBy(() -> connector.reconocerDiagrama(new byte[] {1}, "image/png"))
+          .isInstanceOf(ApiException.class).hasMessageContaining("pausa");
+      assertThat(llamadas.get()).isEqualTo(1);
+      String publica = new ObjectMapper().writeValueAsString(connector.configuracionPublica());
+      assertThat(publica).contains("EN_PAUSA", "reintentarEnSegundos")
+          .doesNotContain("secreto-no-publico", url);
+    } finally { server.stop(0); }
+  }
+
+  @Test
+  void errorDeCredencialDeOtroProveedorNoSeAtribuyeAGemini() throws Exception {
+    var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext("/vision", exchange -> {
+      exchange.getRequestBody().readAllBytes();
+      exchange.sendResponseHeaders(401, -1);
+      exchange.close();
+    });
+    server.start();
+    try {
+      String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/vision";
+      var connector = new ConectorIaRemoto(RestClient.builder(), new ObjectMapper(),
+          mock(ResolverServicioActivo.class), "OLLAMA", "", "", url, "", "", "vision", "");
+      assertThatThrownBy(() -> connector.reconocerDiagrama(new byte[] {1}, "image/png"))
+          .isInstanceOf(ApiException.class).hasMessageContaining("credencial")
+          .hasMessageNotContaining("Google").hasMessageNotContaining("Gemini");
+    } finally { server.stop(0); }
+  }
+
+  @Test
   void laCuotaDeTextoNoDeshabilitaElServicioDeImagenes() throws Exception {
     var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     server.createContext("/texto", exchange -> {

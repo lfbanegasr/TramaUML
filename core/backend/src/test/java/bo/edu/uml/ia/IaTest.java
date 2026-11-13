@@ -21,6 +21,45 @@ class IaTest {
     private final ObjectMapper json = new ObjectMapper();
     private final MotorAsistenciaInteligente motor = new MotorAsistenciaInteligente(json);
 
+    private bo.edu.uml.ia.servicio.IaServicio lectorImagenes() {
+        return new bo.edu.uml.ia.servicio.IaServicio(null, motor, null, null, null, json, null,
+                org.mockito.Mockito.mock(org.springframework.transaction.PlatformTransactionManager.class));
+    }
+
+    private byte[] pngMinimo() throws Exception {
+        var bytes = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(new java.awt.image.BufferedImage(1, 1,
+                java.awt.image.BufferedImage.TYPE_INT_RGB), "png", bytes);
+        return bytes.toByteArray();
+    }
+
+    @Test
+    void imagenValidaConservaSusBytesOriginales() throws Exception {
+        byte[] png = pngMinimo();
+        assertThat(lectorImagenes().leerImagen(new org.springframework.mock.web.MockMultipartFile(
+                "archivo", "diagrama.png", "image/png", png))).isEqualTo(png);
+    }
+
+    @Test
+    void imagenRechazaMimeInconsistente() throws Exception {
+        byte[] png = pngMinimo();
+        assertThatThrownBy(() -> lectorImagenes().leerImagen(new org.springframework.mock.web.MockMultipartFile(
+                "archivo", "diagrama.jpg", "image/jpeg", png)))
+                .isInstanceOf(ApiException.class).hasMessageContaining("tipo declarado");
+    }
+
+    @Test
+    void imagenRechazaDimensionesAntesDeReservarLaMemoriaDePixeles() throws Exception {
+        byte[] png = pngMinimo();
+        java.nio.ByteBuffer.wrap(png).putInt(16, 10000).putInt(20, 10000);
+        var crc = new java.util.zip.CRC32();
+        crc.update(png, 12, 17);
+        java.nio.ByteBuffer.wrap(png).putInt(29, (int) crc.getValue());
+        assertThatThrownBy(() -> lectorImagenes().leerImagen(new org.springframework.mock.web.MockMultipartFile(
+                "archivo", "diagrama.png", "image/png", png)))
+                .isInstanceOf(ApiException.class).hasMessageContaining("dimensiones");
+    }
+
     @Test
     void interpretaClasesAtributosRelacionYDependencias() {
         var resultado =

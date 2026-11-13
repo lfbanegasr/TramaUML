@@ -125,6 +125,8 @@ public class GeneracionRepositorio {
     }
 
     public VersionSnapshot version(UUID modelo, UUID version, UUID actual) {
+        if (version == null) throw new ApiException(422,
+                "Guarda una versión del modelo antes de configurar el backend.");
         return jdbc
                 .query(
                         "select id,numero_version,revision,estado_validacion,instantanea::text "
@@ -235,14 +237,7 @@ public class GeneracionRepositorio {
             List<MapeoPersistencia> persistencia,
             String plantillaJson,
             String estado) {
-        jdbc.update(
-                "update uml_colaborativo.configuracion_generacion_backend set"
-                    + " estado='DESACTUALIZADO',actualizado_en=clock_timestamp() where"
-                    + " id_version_modelo=:version and estado in ('BORRADOR','VALIDO','INVALIDO')"
-                    + " and not exists(select 1 from uml_colaborativo.generacion_backend g where"
-                    + " g.id_configuracion=configuracion_generacion_backend.id)",
-                Map.of("version", version));
-
+        // Cada guardado conserva una configuración independiente; las anteriores siguen utilizables.
         UUID id = UUID.randomUUID();
         jdbc.update(
                 "insert into uml_colaborativo.configuracion_generacion_backend"

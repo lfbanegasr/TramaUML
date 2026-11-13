@@ -76,6 +76,35 @@ export function ServicioForm({
           {error}
         </p>
       )}
+      <div className="workflow-summary">
+        <p>
+          Texto interpreta solicitudes y responde consultas. Imagen lee fotos y diagramas. Cada
+          capacidad tiene su propia configuración y comprobación.
+        </p>
+        {proveedor === 'GEMINI' && (
+          <button
+            type="button"
+            disabled={ocupado}
+            onClick={() => {
+              const elegido = modeloRemoto.startsWith('gemini-')
+                ? modeloRemoto.trim()
+                : 'gemini-3.8-flash';
+              setModeloRemoto(elegido);
+              setUrl(
+                `https://generativelanguage.googleapis.com/v1beta/models/${elegido}:generateContent`,
+              );
+            }}
+          >
+            Completar URL y modelo de Gemini
+          </button>
+        )}
+        {proveedor === 'LOCAL' && tipo === 'IA_IMAGEN' && (
+          <p role="status">
+            Para interpretar píxeles selecciona un proveedor con visión. El motor local trabaja con
+            texto.
+          </p>
+        )}
+      </div>
       <div className="form-grid">
         <label>
           Nombre

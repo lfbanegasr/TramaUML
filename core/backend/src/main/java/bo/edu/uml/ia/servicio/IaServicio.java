@@ -17,7 +17,6 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
-import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.*;
@@ -686,11 +685,21 @@ public class IaServicio {
     byte[] contenido = leer(archivo, MAX_IMAGEN, "imagen");
     if (!Set.of("image/png", "image/jpeg").contains(archivo.getContentType()))
       throw new ApiException(415, "La imagen debe estar en formato PNG o JPG.");
-    try {
-      BufferedImage imagen = ImageIO.read(new ByteArrayInputStream(contenido));
-      if (imagen == null) throw new ApiException(422, "El archivo no contiene una imagen válida.");
-      if (imagen.getWidth() > 12000 || imagen.getHeight() > 12000)
-        throw new ApiException(413, "Las dimensiones de la imagen son demasiado grandes.");
+    try (var entrada = ImageIO.createImageInputStream(new ByteArrayInputStream(contenido))) {
+      var lectores = ImageIO.getImageReaders(entrada);
+      if (!lectores.hasNext()) throw new ApiException(422, "El archivo no contiene una imagen válida.");
+      var lector = lectores.next();
+      try {
+        lector.setInput(entrada, true, true);
+        String formato = lector.getFormatName();
+        if (!("PNG".equalsIgnoreCase(formato) && "image/png".equals(archivo.getContentType()))
+            && !("JPEG".equalsIgnoreCase(formato) && "image/jpeg".equals(archivo.getContentType())))
+          throw new ApiException(422, "El formato de la imagen no coincide con el tipo declarado.");
+        int ancho = lector.getWidth(0), alto = lector.getHeight(0);
+        if (ancho > 12000 || alto > 12000 || (long) ancho * alto > 40000000)
+          throw new ApiException(413, "Las dimensiones de la imagen son demasiado grandes.");
+        if (lector.read(0) == null) throw new ApiException(422, "El archivo no contiene una imagen válida.");
+      } finally { lector.dispose(); }
     } catch (IOException e) {
       throw new ApiException(422, "No se pudo leer la imagen.");
     }

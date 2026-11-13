@@ -31,9 +31,16 @@ public class ValidacionServicio {
 
     @Transactional(isolation = Isolation.REPEATABLE_READ)
     public Object solicitar(Identidad a, UUID modelo) {
+        return solicitar(a, modelo, null);
+    }
+
+    @Transactional(isolation = Isolation.REPEATABLE_READ)
+    public Object solicitar(Identidad a, UUID modelo, UUID version) {
         var c = autorizar(a, modelo, true);
-        UUID id = repo.crear(c, a.id());
-        return Map.of("id", id, "revision", c.revision(), "estado", "EN_EJECUCION");
+        var seleccionada = repo.version(c, version);
+        UUID id = repo.crear(seleccionada, a.id());
+        return Map.of("id", id, "revision", seleccionada.revision(),
+                "version", seleccionada.version(), "estado", "EN_EJECUCION");
     }
 
     @Transactional(readOnly = true)
