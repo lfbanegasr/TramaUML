@@ -217,6 +217,95 @@ for (const guardarAntes of [false, true]) {
   });
 }
 
+test('muestra los bloqueos concretos y permite generar después de corregir los ajustes', async ({
+  page,
+}) => {
+  let guardados = 0;
+  let generados = 0;
+  await page.route('**/api/**', async (route) => {
+    const req = route.request(),
+      url = new URL(req.url());
+    if (!url.pathname.startsWith('/api/')) return route.continue();
+    if (url.pathname.endsWith('/csrf'))
+      return route.fulfill({ json: { token: 'prueba', header: 'X-CSRF' } });
+    if (url.pathname.endsWith('/configuracion')) {
+      if (req.method() !== 'PUT') return route.fulfill({ json: configuracion() });
+      guardados++;
+      const cfg = req.postDataJSON();
+      const correcto = cfg.generarRepositorios;
+      return route.fulfill({
+        json: {
+          ...configuracion(),
+          ...cfg,
+          id: 'cfg',
+          estado: correcto ? 'VALIDO' : 'INVALIDO',
+          puedeGenerar: correcto,
+          mensajes: correcto
+            ? []
+            : [
+                {
+                  nivel: 'ERROR',
+                  codigo: 'CAPAS_INCOMPATIBLES',
+                  mensaje: 'La capa de servicios requiere repositorios en este generador.',
+                },
+                {
+                  nivel: 'ERROR',
+                  codigo: 'REST_SIN_CONTROLADORES',
+                  mensaje: 'OpenAPI/REST requiere la capa de controladores.',
+                },
+                {
+                  nivel: 'ADVERTENCIA',
+                  codigo: 'NEGOCIO_PENDIENTE',
+                  mensaje: 'Las reglas de negocio requieren implementación.',
+                },
+              ],
+        },
+      });
+    }
+    if (url.pathname.endsWith('/generar')) {
+      generados++;
+      return route.fulfill({
+        json: {
+          idGeneracion: 'g',
+          idConfiguracion: 'cfg',
+          idVersionModelo: 'actual',
+          nombreArchivo: 'backend.zip',
+          totalClases: 1,
+          totalOperaciones: 0,
+          totalArchivosGenerados: 12,
+        },
+      });
+    }
+    return route.fulfill({ json: [] });
+  });
+  await abrirComponente(
+    page,
+    'interoperabilidad/components/GenerarBackendDialog',
+    `{modelo:'m',nombreModelo:'Prueba',cerrar:()=>{}}`,
+  );
+  await page.getByText('Opciones avanzadas: capas, clases y tipos', { exact: true }).click();
+  await page.getByLabel('Repositorios JPA', { exact: true }).uncheck();
+  await page.getByRole('button', { name: 'Guardar ajustes', exact: true }).click();
+  await expect(page.getByText(/Hay bloqueos pendientes en la configuración/)).toBeVisible();
+  await expect(page.getByText(/Ya puedes generar el backend/)).toHaveCount(0);
+  await page.getByRole('button', { name: 'Generar backend', exact: true }).click();
+  const alerta = page.getByRole('alert').filter({ hasText: 'Los ajustes se guardaron' });
+  await expect(alerta).toBeVisible();
+  await expect(alerta).toBeFocused();
+  await expect(alerta.getByRole('listitem')).toHaveCount(2);
+  await expect(alerta).toContainText('CAPAS_INCOMPATIBLES');
+  await expect(alerta).toContainText('La capa de servicios requiere repositorios');
+  await expect(alerta).toContainText('REST_SIN_CONTROLADORES');
+  await expect(alerta).not.toContainText('NEGOCIO_PENDIENTE');
+  expect(generados).toBe(0);
+  await page.getByLabel('Repositorios JPA', { exact: true }).check();
+  await page.getByRole('button', { name: 'Generar backend', exact: true }).click();
+  await expect(page.getByText('Proyecto generado desde una versión UML congelada')).toBeVisible();
+  await expect(alerta).toHaveCount(0);
+  expect(generados).toBe(1);
+  expect(guardados).toBe(3);
+});
+
 test('un ZIP aprobado se descarga durante otra comprobación y después de un fallo', async ({
   page,
 }) => {

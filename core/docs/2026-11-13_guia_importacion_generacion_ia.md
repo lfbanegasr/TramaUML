@@ -14,6 +14,8 @@ La validación del diagrama y la compilación del proyecto son comprobaciones di
 
 Se pueden guardar varias configuraciones con el mismo nombre y versión: cada guardado conserva una instantánea independiente y no invalida las anteriores. El historial permite recuperar las generaciones anteriores, incluidas las aprobadas más antiguas.
 
+Guardar permite conservar ajustes incompletos. Si quedan bloqueos, el mensaje de guardado lo indica. Al pulsar **Generar backend**, el aviso muestra los códigos y las explicaciones de todos los bloqueos y recibe el foco; las advertencias no se incluyen como impedimentos. Corregir los ajustes y generar de nuevo guarda los cambios y continúa. Un guardado exitoso no equivale a una configuración generable.
+
 Si ninguna clase seleccionada está marcada como persistente, al guardar o generar se preparan automáticamente como entidades del backend. Esto modifica la configuración del backend, sin cambiar el diagrama UML. Si falta un identificador, el generador añade un identificador técnico Long en el código; utiliza otro nombre si ya existe un atributo `id`.
 
 En bases antiguas también se admiten guardados repetidos con el mismo nombre visible, conservando cada configuración anterior. Si el esquema todavía exige validar UML antes de generar, el servidor realiza esa comprobación automáticamente sobre la versión elegida y conserva su informe real. Si encuentra errores UML, informa de ellos; nunca marca una versión como válida sin evaluarla. Con la migración 12 la generación es independiente de esta comprobación.

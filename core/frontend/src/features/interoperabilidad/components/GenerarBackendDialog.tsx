@@ -88,12 +88,19 @@ export function GenerarBackendDialog({
   const [cfg, setCfg] = useState<ConfiguracionGeneracion | null>(null);
   const [resultado, setResultado] = useState<ResultadoGeneracion | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [bloqueos, setBloqueos] = useState<ConfiguracionGeneracion['mensajes']>([]);
+  const avisoError = useRef<HTMLDivElement>(null);
   const [generaciones, setGeneraciones] = useState<GeneracionDisponible[]>([]);
   const [seleccionada, setSeleccionada] = useState<string>('');
   const [mensaje, setMensaje] = useState('');
   const versionElegida = useRef<string | undefined>(undefined);
   const carga = useRef(0);
   const ajustesGuardados = useRef<string | null>(null);
+  useEffect(() => {
+    if (!error) return;
+    avisoError.current?.focus({ preventScroll: true });
+    avisoError.current?.scrollIntoView({ block: 'nearest' });
+  }, [error, bloqueos]);
   const actualizarInforme = useCallback((id: string, informe: InformeBackend) => {
     setGeneraciones((actual) =>
       actual.map((g) => (g.idGeneracion === id ? { ...g, validacion: informe } : g)),
@@ -143,6 +150,7 @@ export function GenerarBackendDialog({
     versionElegida.current = version;
     setEstado('cargando');
     setError(null);
+    setBloqueos([]);
     setResultado(null);
     setMensaje('');
     try {
@@ -235,6 +243,7 @@ export function GenerarBackendDialog({
 
   async function guardar(): Promise<ConfiguracionGeneracion | null> {
     if (!cfg) return null;
+    setBloqueos([]);
     const preparada = prepararEntidades(cfg);
     if (
       preparada.id &&
@@ -254,7 +263,7 @@ export function GenerarBackendDialog({
       setCfg(guardada);
       ajustesGuardados.current = huellaAjustes(guardada);
       setMensaje(
-        `Ajustes guardados para la versión v${guardada.numeroVersion}. Ya puedes generar el backend.`,
+        `Ajustes guardados para la versión v${guardada.numeroVersion}. ${guardada.puedeGenerar ? 'Ya puedes generar el backend.' : 'Hay bloqueos pendientes en la configuración.'}`,
       );
       setEstado('listo');
       return guardada;
@@ -274,7 +283,14 @@ export function GenerarBackendDialog({
       const guardada = await guardar();
       if (!guardada?.id) return;
       if (!guardada.puedeGenerar) {
-        setError('Revisa los mensajes de configuración antes de generar.');
+        const motivos = guardada.mensajes.filter((m) => m.nivel === 'ERROR');
+        setBloqueos(motivos);
+        setMensaje('');
+        setError(
+          motivos.length
+            ? `Los ajustes se guardaron, pero hay ${motivos.length === 1 ? 'un bloqueo' : `${motivos.length} bloqueos`} para generar el backend:`
+            : 'El servidor no habilitó la generación y no devolvió el motivo. Vuelve a cargar la versión e inténtalo de nuevo.',
+        );
         setEstado('error');
         return;
       }
@@ -1268,8 +1284,17 @@ export function GenerarBackendDialog({
             </p>
           )}
           {error && (
-            <p className="dialog-error" role="alert">
-              {error}
+            <div className="dialog-error" role="alert" ref={avisoError} tabIndex={-1}>
+              <p>{error}</p>
+              {bloqueos.length > 0 && (
+                <ul>
+                  {bloqueos.map((m) => (
+                    <li key={m.codigo + m.mensaje}>
+                      <strong>{m.codigo}</strong>: {m.mensaje}
+                    </li>
+                  ))}
+                </ul>
+              )}
               {!cfg && (
                 <button
                   onClick={() => void cambiarVersion(versionElegida.current ?? '')}
@@ -1278,7 +1303,7 @@ export function GenerarBackendDialog({
                   Reintentar carga
                 </button>
               )}
-            </p>
+            </div>
           )}
         </div>
 
