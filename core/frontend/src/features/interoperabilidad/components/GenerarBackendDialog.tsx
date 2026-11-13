@@ -52,6 +52,17 @@ const solicitud = (cfg: ConfiguracionGeneracion): ActualizarConfiguracion => ({
   dependencias: cfg.dependencias,
 });
 
+function prepararEntidades(cfg: ConfiguracionGeneracion): ConfiguracionGeneracion {
+  const seleccionadas = cfg.clases.filter((c) => c.seleccionada);
+  if (!seleccionadas.length || seleccionadas.some((c) => c.esPersistente)) return cfg;
+  return {
+    ...cfg,
+    clases: cfg.clases.map((c) => (c.seleccionada ? { ...c, esPersistente: true } : c)),
+  };
+}
+
+const huellaAjustes = (cfg: ConfiguracionGeneracion) => JSON.stringify(solicitud(cfg));
+
 export function GenerarBackendDialog({
   modelo,
   nombreModelo,
@@ -82,6 +93,7 @@ export function GenerarBackendDialog({
   const [mensaje, setMensaje] = useState('');
   const versionElegida = useRef<string | undefined>(undefined);
   const carga = useRef(0);
+  const ajustesGuardados = useRef<string | null>(null);
   const actualizarInforme = useCallback((id: string, informe: InformeBackend) => {
     setGeneraciones((actual) =>
       actual.map((g) => (g.idGeneracion === id ? { ...g, validacion: informe } : g)),
@@ -105,6 +117,7 @@ export function GenerarBackendDialog({
       .then((configuracion) => {
         if (activo) {
           setCfg(configuracion);
+          ajustesGuardados.current = configuracion.id ? huellaAjustes(configuracion) : null;
           versionElegida.current = configuracion.idVersionModelo;
           setEstado('listo');
         }
@@ -136,6 +149,7 @@ export function GenerarBackendDialog({
       const configuracion = await leerConfigGeneracion(modelo, version);
       if (peticion !== carga.current) return;
       setCfg(configuracion);
+      ajustesGuardados.current = configuracion.id ? huellaAjustes(configuracion) : null;
       setSeleccionada(
         artefacto ?? generaciones.find((g) => g.idVersionModelo === version)?.idGeneracion ?? '',
       );
@@ -221,12 +235,27 @@ export function GenerarBackendDialog({
 
   async function guardar(): Promise<ConfiguracionGeneracion | null> {
     if (!cfg) return null;
+    const preparada = prepararEntidades(cfg);
+    if (
+      preparada.id &&
+      preparada.estado === 'VALIDO' &&
+      ajustesGuardados.current === huellaAjustes(preparada)
+    ) {
+      setError(null);
+      setMensaje(
+        `Los ajustes de la versión v${preparada.numeroVersion} ya están guardados. Puedes generar el backend.`,
+      );
+      return preparada;
+    }
     setEstado('guardando');
     setError(null);
     try {
-      const guardada = await guardarConfigGeneracion(modelo, solicitud(cfg));
+      const guardada = await guardarConfigGeneracion(modelo, solicitud(preparada));
       setCfg(guardada);
-      setMensaje(`Configuración guardada para la versión v${guardada.numeroVersion}.`);
+      ajustesGuardados.current = huellaAjustes(guardada);
+      setMensaje(
+        `Ajustes guardados para la versión v${guardada.numeroVersion}. Ya puedes generar el backend.`,
+      );
       setEstado('listo');
       return guardada;
     } catch (e) {
@@ -344,6 +373,8 @@ export function GenerarBackendDialog({
             Configura una generación reproducible de <em>{nombreModelo}</em> sobre una versión UML
             guardada. Puedes generar y volver a generar sin validar el modelo UML. La compilación
             del ZIP es independiente; las generaciones aprobadas siguen disponibles para descargar.
+            Al generar se guardan los ajustes que cambiaron y se preparan las entidades
+            automáticamente.
           </p>
 
           {estado === 'cargando' && <p className="dialog-status">Cargando configuración…</p>}
@@ -724,11 +755,19 @@ export function GenerarBackendDialog({
                   </details>
                 </details>
 
-                {cfg.mensajes.length > 0 && (
+                {cfg.mensajes.some((m) => m.codigo === 'SIN_ENTIDADES_PERSISTENTES') && (
+                  <p className="workflow-summary">
+                    Al guardar o generar, las clases seleccionadas se prepararán como entidades del
+                    backend. El diagrama UML no se modifica.
+                  </p>
+                )}
+                {cfg.mensajes.some((m) => m.codigo !== 'SIN_ENTIDADES_PERSISTENTES') && (
                   <div className="diagnostico-backend-container" aria-live="polite">
                     <div className="diagnostico-backend-header-row">
                       <h4 className="diagnostico-backend-titulo">
-                        {cfg.mensajes.some((m) => m.nivel === 'ERROR')
+                        {cfg.mensajes.some(
+                          (m) => m.nivel === 'ERROR' && m.codigo !== 'SIN_ENTIDADES_PERSISTENTES',
+                        )
                           ? '⚠️ Problemas que impiden la generación del backend:'
                           : 'ℹ️ Observaciones de la configuración:'}
                       </h4>
@@ -897,248 +936,69 @@ export function GenerarBackendDialog({
                         )}
                     </div>
                     <div className="diagnostico-backend-lista">
-                      {cfg.mensajes.map((m) => {
-                        const esError = m.nivel === 'ERROR';
-                        const esTipoFaltante = m.codigo === 'ATRIBUTO_SIN_TIPO';
-                        const esFaltaId = m.codigo === 'CLASE_SIN_ID';
-                        const esSinValidar = m.codigo === 'VERSION_SIN_VALIDAR';
+                      {cfg.mensajes
+                        .filter((m) => m.codigo !== 'SIN_ENTIDADES_PERSISTENTES')
+                        .map((m) => {
+                          const esError = m.nivel === 'ERROR';
+                          const esTipoFaltante = m.codigo === 'ATRIBUTO_SIN_TIPO';
+                          const esFaltaId = m.codigo === 'CLASE_SIN_ID';
+                          const esSinValidar = m.codigo === 'VERSION_SIN_VALIDAR';
 
-                        const matchClase =
-                          m.mensaje.match(/clase (?:persistente )?'([^']+)'/i) ||
-                          m.mensaje.match(/En la clase '([^']+)'/i);
-                        const matchAttr = m.mensaje.match(/el atributo '([^']+)'/i);
-                        const nombreClase = matchClase ? matchClase[1] : null;
-                        const nombreAttr = matchAttr ? matchAttr[1] : null;
+                          const matchClase =
+                            m.mensaje.match(/clase (?:persistente )?'([^']+)'/i) ||
+                            m.mensaje.match(/En la clase '([^']+)'/i);
+                          const matchAttr = m.mensaje.match(/el atributo '([^']+)'/i);
+                          const nombreClase = matchClase ? matchClase[1] : null;
+                          const nombreAttr = matchAttr ? matchAttr[1] : null;
 
-                        const clase = modeloObj?.clases.find((c) => c.nombre === nombreClase);
-                        const attr = modeloObj?.atributos.find(
-                          (a) =>
-                            (clase ? a.id_clase === clase.id : true) &&
-                            (nombreAttr ? a.nombre === nombreAttr : true),
-                        );
+                          const clase = modeloObj?.clases.find((c) => c.nombre === nombreClase);
+                          const attr = modeloObj?.atributos.find(
+                            (a) =>
+                              (clase ? a.id_clase === clase.id : true) &&
+                              (nombreAttr ? a.nombre === nombreAttr : true),
+                          );
 
-                        return (
-                          <div
-                            key={m.codigo + m.mensaje}
-                            className={`diagnostico-item ${esError ? 'error' : 'advertencia'}`}
-                          >
-                            <div className="diagnostico-item-header">
-                              <span className={`badge-nivel ${esError ? 'error' : 'warn'}`}>
-                                {esError ? '❌ BLOQUEANTE' : '⚠️ ADVERTENCIA'}
-                              </span>
-                              <span className="diagnostico-codigo">{m.codigo}</span>
-                            </div>
-                            <p className="diagnostico-mensaje">{m.mensaje}</p>
-                            {m.codigo === 'SIN_ENTIDADES_PERSISTENTES' && (
-                              <button
-                                type="button"
-                                disabled={ocupado}
-                                onClick={async () => {
-                                  const preparada = {
-                                    ...cfg,
-                                    clases: cfg.clases.map((c) =>
-                                      c.seleccionada ? { ...c, esPersistente: true } : c,
-                                    ),
-                                  };
-                                  setEstado('guardando');
-                                  setError(null);
-                                  try {
-                                    setCfg(
-                                      await guardarConfigGeneracion(modelo, solicitud(preparada)),
-                                    );
-                                    setMensaje(
-                                      'Clases seleccionadas preparadas como entidades del backend. El diagrama UML no cambió.',
-                                    );
-                                    setEstado('listo');
-                                  } catch (e) {
-                                    setError(
-                                      e instanceof Error
-                                        ? e.message
-                                        : 'No se pudo preparar la configuración.',
-                                    );
-                                    setEstado('error');
-                                  }
-                                }}
-                              >
-                                Preparar clases seleccionadas como entidades
-                              </button>
-                            )}
+                          return (
+                            <div
+                              key={m.codigo + m.mensaje}
+                              className={`diagnostico-item ${esError ? 'error' : 'advertencia'}`}
+                            >
+                              <div className="diagnostico-item-header">
+                                <span className={`badge-nivel ${esError ? 'error' : 'warn'}`}>
+                                  {esError ? '❌ BLOQUEANTE' : '⚠️ ADVERTENCIA'}
+                                </span>
+                                <span className="diagnostico-codigo">{m.codigo}</span>
+                              </div>
+                              <p className="diagnostico-mensaje">{m.mensaje}</p>
 
-                            {puedeEditarModelo &&
-                              esTipoFaltante &&
-                              onCambiar &&
-                              (attr || modeloObj) && (
-                                <div className="diagnostico-quick-fix">
-                                  <span className="quick-fix-label">⚡ Asignar tipo rápido:</span>
-                                  <div className="quick-fix-buttons">
-                                    {attr?.nombre.toLowerCase() === 'id' && (
-                                      <button
-                                        type="button"
-                                        className="btn-quick-action"
-                                        disabled={ocupado}
-                                        title="Asigna Long y marca como @Id"
-                                        onClick={async () => {
-                                          if (!attr) return;
-                                          let restricciones = {};
-                                          try {
-                                            restricciones = JSON.parse(
-                                              attr.restricciones_json || '{}',
-                                            );
-                                          } catch {}
-                                          const exito = await onCambiar({
-                                            operacion: 'ACTUALIZAR',
-                                            entidad: 'ATRIBUTO',
-                                            idEntidad: attr.id,
-                                            datos: {
-                                              idClase: attr.id_clase,
-                                              nombre: attr.nombre,
-                                              tipoUml: 'Long',
-                                              visibilidad: 'PRIVADO',
-                                              minimo: 1,
-                                              maximo: 1,
-                                              esIdentificador: true,
-                                              esEstatico: false,
-                                              esUnico: true,
-                                              valorPredeterminado: '',
-                                              restricciones,
-                                            },
-                                          });
-                                          if (exito) {
-                                            setEstado('guardando');
-                                            await validarCambiosYRecargar();
-                                            setEstado('listo');
-                                          }
-                                        }}
-                                      >
-                                        ⚡ Long (@Id)
-                                      </button>
-                                    )}
-                                    {[
-                                      'String',
-                                      'Long',
-                                      'Integer',
-                                      'Boolean',
-                                      'UUID',
-                                      'LocalDate',
-                                    ].map((tipo) => (
-                                      <button
-                                        key={tipo}
-                                        type="button"
-                                        className="btn-quick-type"
-                                        disabled={ocupado}
-                                        onClick={async () => {
-                                          const targetAttr =
-                                            attr ||
-                                            modeloObj?.atributos.find((a) =>
-                                              m.mensaje.includes(`'${a.nombre}'`),
-                                            );
-                                          if (targetAttr) {
+                              {puedeEditarModelo &&
+                                esTipoFaltante &&
+                                onCambiar &&
+                                (attr || modeloObj) && (
+                                  <div className="diagnostico-quick-fix">
+                                    <span className="quick-fix-label">⚡ Asignar tipo rápido:</span>
+                                    <div className="quick-fix-buttons">
+                                      {attr?.nombre.toLowerCase() === 'id' && (
+                                        <button
+                                          type="button"
+                                          className="btn-quick-action"
+                                          disabled={ocupado}
+                                          title="Asigna Long y marca como @Id"
+                                          onClick={async () => {
+                                            if (!attr) return;
                                             let restricciones = {};
                                             try {
                                               restricciones = JSON.parse(
-                                                targetAttr.restricciones_json || '{}',
+                                                attr.restricciones_json || '{}',
                                               );
-                                            } catch {
-                                              restricciones = {};
-                                            }
+                                            } catch {}
                                             const exito = await onCambiar({
                                               operacion: 'ACTUALIZAR',
                                               entidad: 'ATRIBUTO',
-                                              idEntidad: targetAttr.id,
+                                              idEntidad: attr.id,
                                               datos: {
-                                                idClase: targetAttr.id_clase,
-                                                nombre: targetAttr.nombre,
-                                                tipoUml: tipo,
-                                                visibilidad: targetAttr.visibilidad || 'PRIVADO',
-                                                minimo: targetAttr.multiplicidad_minima ?? 1,
-                                                maximo: targetAttr.multiplicidad_maxima ?? 1,
-                                                esIdentificador:
-                                                  targetAttr.es_identificador ?? false,
-                                                esEstatico: targetAttr.es_estatico ?? false,
-                                                esUnico: targetAttr.es_unico ?? false,
-                                                valorPredeterminado:
-                                                  targetAttr.valor_predeterminado ?? '',
-                                                restricciones,
-                                              },
-                                            });
-                                            if (exito) {
-                                              setEstado('guardando');
-                                              await validarCambiosYRecargar();
-                                              setEstado('listo');
-                                            }
-                                          }
-                                        }}
-                                      >
-                                        {tipo}
-                                      </button>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-
-                            {puedeEditarModelo &&
-                              esFaltaId &&
-                              esError &&
-                              onCambiar &&
-                              (clase || modeloObj) && (
-                                <div className="diagnostico-quick-fix">
-                                  <span className="quick-fix-label">⚡ Identificador:</span>
-                                  <div className="quick-fix-buttons">
-                                    <button
-                                      type="button"
-                                      className="btn-quick-action"
-                                      disabled={ocupado}
-                                      onClick={async () => {
-                                        const targetClase =
-                                          clase ||
-                                          modeloObj?.clases.find((c) =>
-                                            m.mensaje.includes(`'${c.nombre}'`),
-                                          );
-                                        if (targetClase) {
-                                          const attrExistente = modeloObj?.atributos.find(
-                                            (a) =>
-                                              a.id_clase === targetClase.id &&
-                                              a.nombre.toLowerCase() === 'id',
-                                          );
-
-                                          let exito = false;
-                                          if (attrExistente) {
-                                            let restricciones = {};
-                                            try {
-                                              restricciones = JSON.parse(
-                                                attrExistente.restricciones_json || '{}',
-                                              );
-                                            } catch {}
-                                            exito = await onCambiar({
-                                              operacion: 'ACTUALIZAR',
-                                              entidad: 'ATRIBUTO',
-                                              idEntidad: attrExistente.id,
-                                              datos: {
-                                                idClase: targetClase.id,
-                                                nombre: attrExistente.nombre,
-                                                tipoUml:
-                                                  attrExistente.tipo_uml &&
-                                                  !attrExistente.tipo_uml.startsWith('uml:')
-                                                    ? attrExistente.tipo_uml
-                                                    : 'Long',
-                                                visibilidad: 'PRIVADO',
-                                                minimo: 1,
-                                                maximo: 1,
-                                                esIdentificador: true,
-                                                esEstatico: false,
-                                                esUnico: true,
-                                                valorPredeterminado: '',
-                                                restricciones,
-                                              },
-                                            });
-                                          } else {
-                                            exito = await onCambiar({
-                                              operacion: 'CREAR',
-                                              entidad: 'ATRIBUTO',
-                                              idEntidad: crypto.randomUUID(),
-                                              datos: {
-                                                idClase: targetClase.id,
-                                                nombre: 'id',
+                                                idClase: attr.id_clase,
+                                                nombre: attr.nombre,
                                                 tipoUml: 'Long',
                                                 visibilidad: 'PRIVADO',
                                                 minimo: 1,
@@ -1147,85 +1007,232 @@ export function GenerarBackendDialog({
                                                 esEstatico: false,
                                                 esUnico: true,
                                                 valorPredeterminado: '',
-                                                restricciones: {},
+                                                restricciones,
                                               },
                                             });
-                                          }
+                                            if (exito) {
+                                              setEstado('guardando');
+                                              await validarCambiosYRecargar();
+                                              setEstado('listo');
+                                            }
+                                          }}
+                                        >
+                                          ⚡ Long (@Id)
+                                        </button>
+                                      )}
+                                      {[
+                                        'String',
+                                        'Long',
+                                        'Integer',
+                                        'Boolean',
+                                        'UUID',
+                                        'LocalDate',
+                                      ].map((tipo) => (
+                                        <button
+                                          key={tipo}
+                                          type="button"
+                                          className="btn-quick-type"
+                                          disabled={ocupado}
+                                          onClick={async () => {
+                                            const targetAttr =
+                                              attr ||
+                                              modeloObj?.atributos.find((a) =>
+                                                m.mensaje.includes(`'${a.nombre}'`),
+                                              );
+                                            if (targetAttr) {
+                                              let restricciones = {};
+                                              try {
+                                                restricciones = JSON.parse(
+                                                  targetAttr.restricciones_json || '{}',
+                                                );
+                                              } catch {
+                                                restricciones = {};
+                                              }
+                                              const exito = await onCambiar({
+                                                operacion: 'ACTUALIZAR',
+                                                entidad: 'ATRIBUTO',
+                                                idEntidad: targetAttr.id,
+                                                datos: {
+                                                  idClase: targetAttr.id_clase,
+                                                  nombre: targetAttr.nombre,
+                                                  tipoUml: tipo,
+                                                  visibilidad: targetAttr.visibilidad || 'PRIVADO',
+                                                  minimo: targetAttr.multiplicidad_minima ?? 1,
+                                                  maximo: targetAttr.multiplicidad_maxima ?? 1,
+                                                  esIdentificador:
+                                                    targetAttr.es_identificador ?? false,
+                                                  esEstatico: targetAttr.es_estatico ?? false,
+                                                  esUnico: targetAttr.es_unico ?? false,
+                                                  valorPredeterminado:
+                                                    targetAttr.valor_predeterminado ?? '',
+                                                  restricciones,
+                                                },
+                                              });
+                                              if (exito) {
+                                                setEstado('guardando');
+                                                await validarCambiosYRecargar();
+                                                setEstado('listo');
+                                              }
+                                            }
+                                          }}
+                                        >
+                                          {tipo}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
 
-                                          if (exito) {
-                                            setEstado('guardando');
-                                            await validarCambiosYRecargar();
-                                            setEstado('listo');
+                              {puedeEditarModelo &&
+                                esFaltaId &&
+                                esError &&
+                                onCambiar &&
+                                (clase || modeloObj) && (
+                                  <div className="diagnostico-quick-fix">
+                                    <span className="quick-fix-label">⚡ Identificador:</span>
+                                    <div className="quick-fix-buttons">
+                                      <button
+                                        type="button"
+                                        className="btn-quick-action"
+                                        disabled={ocupado}
+                                        onClick={async () => {
+                                          const targetClase =
+                                            clase ||
+                                            modeloObj?.clases.find((c) =>
+                                              m.mensaje.includes(`'${c.nombre}'`),
+                                            );
+                                          if (targetClase) {
+                                            const attrExistente = modeloObj?.atributos.find(
+                                              (a) =>
+                                                a.id_clase === targetClase.id &&
+                                                a.nombre.toLowerCase() === 'id',
+                                            );
+
+                                            let exito = false;
+                                            if (attrExistente) {
+                                              let restricciones = {};
+                                              try {
+                                                restricciones = JSON.parse(
+                                                  attrExistente.restricciones_json || '{}',
+                                                );
+                                              } catch {}
+                                              exito = await onCambiar({
+                                                operacion: 'ACTUALIZAR',
+                                                entidad: 'ATRIBUTO',
+                                                idEntidad: attrExistente.id,
+                                                datos: {
+                                                  idClase: targetClase.id,
+                                                  nombre: attrExistente.nombre,
+                                                  tipoUml:
+                                                    attrExistente.tipo_uml &&
+                                                    !attrExistente.tipo_uml.startsWith('uml:')
+                                                      ? attrExistente.tipo_uml
+                                                      : 'Long',
+                                                  visibilidad: 'PRIVADO',
+                                                  minimo: 1,
+                                                  maximo: 1,
+                                                  esIdentificador: true,
+                                                  esEstatico: false,
+                                                  esUnico: true,
+                                                  valorPredeterminado: '',
+                                                  restricciones,
+                                                },
+                                              });
+                                            } else {
+                                              exito = await onCambiar({
+                                                operacion: 'CREAR',
+                                                entidad: 'ATRIBUTO',
+                                                idEntidad: crypto.randomUUID(),
+                                                datos: {
+                                                  idClase: targetClase.id,
+                                                  nombre: 'id',
+                                                  tipoUml: 'Long',
+                                                  visibilidad: 'PRIVADO',
+                                                  minimo: 1,
+                                                  maximo: 1,
+                                                  esIdentificador: true,
+                                                  esEstatico: false,
+                                                  esUnico: true,
+                                                  valorPredeterminado: '',
+                                                  restricciones: {},
+                                                },
+                                              });
+                                            }
+
+                                            if (exito) {
+                                              setEstado('guardando');
+                                              await validarCambiosYRecargar();
+                                              setEstado('listo');
+                                            }
                                           }
+                                        }}
+                                      >
+                                        + Añadir 'id: Long' (@Id)
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+
+                              {esSinValidar && (
+                                <div className="diagnostico-quick-fix">
+                                  <span className="quick-fix-label">Validación UML opcional:</span>
+                                  <div className="quick-fix-buttons">
+                                    <button
+                                      type="button"
+                                      className="btn-quick-action"
+                                      disabled={ocupado}
+                                      onClick={async () => {
+                                        setEstado('guardando');
+                                        try {
+                                          await validarYRecargar();
+                                          setEstado('listo');
+                                        } catch (e) {
+                                          setError(
+                                            e instanceof Error
+                                              ? e.message
+                                              : 'Error al validar el modelo UML.',
+                                          );
+                                          setEstado('error');
                                         }
                                       }}
                                     >
-                                      + Añadir 'id: Long' (@Id)
+                                      Validar UML (opcional)
                                     </button>
                                   </div>
                                 </div>
                               )}
 
-                            {esSinValidar && (
-                              <div className="diagnostico-quick-fix">
-                                <span className="quick-fix-label">Validación UML opcional:</span>
-                                <div className="quick-fix-buttons">
+                              <div className="diagnostico-item-acciones">
+                                {onAbrirIa && (
                                   <button
                                     type="button"
-                                    className="btn-quick-action"
-                                    disabled={ocupado}
-                                    onClick={async () => {
-                                      setEstado('guardando');
-                                      try {
-                                        await validarYRecargar();
-                                        setEstado('listo');
-                                      } catch (e) {
-                                        setError(
-                                          e instanceof Error
-                                            ? e.message
-                                            : 'Error al validar el modelo UML.',
-                                        );
-                                        setEstado('error');
-                                      }
+                                    className="btn-ia-fix-sm"
+                                    onClick={() => {
+                                      cerrar();
+                                      onAbrirIa(
+                                        `Ayúdame a corregir este problema en el backend: ${m.mensaje}. Por favor propón los cambios necesarios en el modelo UML.`,
+                                      );
                                     }}
                                   >
-                                    Validar UML (opcional)
+                                    🤖 Corregir con IA
                                   </button>
-                                </div>
+                                )}
+                                {onAbrirValidacion && m.codigo === 'VERSION_SIN_VALIDAR' && (
+                                  <button
+                                    type="button"
+                                    className="btn-link-sm"
+                                    onClick={() => {
+                                      cerrar();
+                                      onAbrirValidacion();
+                                    }}
+                                  >
+                                    🔍 Abrir panel de validación semántica
+                                  </button>
+                                )}
                               </div>
-                            )}
-
-                            <div className="diagnostico-item-acciones">
-                              {onAbrirIa && (
-                                <button
-                                  type="button"
-                                  className="btn-ia-fix-sm"
-                                  onClick={() => {
-                                    cerrar();
-                                    onAbrirIa(
-                                      `Ayúdame a corregir este problema en el backend: ${m.mensaje}. Por favor propón los cambios necesarios en el modelo UML.`,
-                                    );
-                                  }}
-                                >
-                                  🤖 Corregir con IA
-                                </button>
-                              )}
-                              {onAbrirValidacion && m.codigo === 'VERSION_SIN_VALIDAR' && (
-                                <button
-                                  type="button"
-                                  className="btn-link-sm"
-                                  onClick={() => {
-                                    cerrar();
-                                    onAbrirValidacion();
-                                  }}
-                                >
-                                  🔍 Abrir panel de validación semántica
-                                </button>
-                              )}
                             </div>
-                          </div>
-                        );
-                      })}
+                          );
+                        })}
                     </div>
                   </div>
                 )}
@@ -1282,7 +1289,7 @@ export function GenerarBackendDialog({
           {cfg && (
             <>
               <button onClick={() => void guardar()} disabled={ocupado}>
-                Guardar
+                Guardar ajustes
               </button>
               <button
                 id="btn-confirmar-generar-backend"
@@ -1294,7 +1301,7 @@ export function GenerarBackendDialog({
                   ? 'Procesando…'
                   : resultado
                     ? 'Volver a generar esta versión'
-                    : 'Guardar y generar'}
+                    : 'Generar backend'}
               </button>
             </>
           )}

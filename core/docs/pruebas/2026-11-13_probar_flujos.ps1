@@ -1,6 +1,7 @@
 param(
     [int]$Puerto = 55436,
-    [string]$Pruebas = 'GeneracionTest,IaTest,ConectorGeminiRespuestaTest,ImagenesGeminiTest,NucleoIntegracionTest#guardarMismoNombreGenerarSinValidarYDescargarDuranteRevalidacion+versionHistoricaSeValidaYRegeneraSinRestaurarNiPerderLaDescargaAnterior+configuracionYGeneracionBackendYDescarga+generacionAvanzadaCongelaLaVersionYAislaConfiguracionesYArtefactos+validacionBackendControlaPermisosCsrfIntegridadYErroresDeCompilacion'
+    [switch]$EsquemaLegado,
+    [string]$Pruebas = 'GeneracionTest,IaTest,ConectorGeminiRespuestaTest,ImagenesGeminiTest,NucleoIntegracionTest#guardarYGenerarConRestriccionesAnteriores+guardarMismoNombreGenerarSinValidarYDescargarDuranteRevalidacion+versionHistoricaSeValidaYRegeneraSinRestaurarNiPerderLaDescargaAnterior+configuracionYGeneracionBackendYDescarga+generacionAvanzadaCongelaLaVersionYAislaConfiguracionesYArtefactos+validacionBackendControlaPermisosCsrfIntegridadYErroresDeCompilacion'
 )
 $ErrorActionPreference = 'Stop'
 $raizFlujos = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
@@ -37,11 +38,13 @@ $env:UML_TEST_DB_URL = "jdbc:postgresql://127.0.0.1:$Puerto/$baseFlujos" + '?cur
 $fuentesFlujos = @('2026-09-12_00_cuenta_aplicacion.sql','2026-09-12_16_esquema_espanol.sql','2026-09-12_17_catalogos_espanol.sql','2026-09-13_18_correcciones_desarrollo.sql') |
     ForEach-Object { Join-Path $raizFlujos ('database/' + $_) }
 $fuentesFlujos += Get-ChildItem -LiteralPath (Join-Path $raizFlujos 'core/docs/migraciones') -Filter '*.sql' |
+    Where-Object { -not $EsquemaLegado -or $_.Name -ne '2026-11-13_12_generacion_independiente.sql' } |
     Sort-Object Name | ForEach-Object { $_.FullName }
 foreach ($fuenteFlujos in $fuentesFlujos) {
     Invoke-PgFlujos 'psql.exe' @('-X','-v','ON_ERROR_STOP=1','-h','127.0.0.1','-p',"$Puerto",'-U','uml_test_owner','-d',$baseFlujos,'-f',$fuenteFlujos)
 }
 Invoke-PgFlujos 'psql.exe' @('-X','-v','ON_ERROR_STOP=1','-h','127.0.0.1','-p',"$Puerto",'-U','uml_test_owner','-d',$baseFlujos,'-c','ALTER ROLE uml_app LOGIN')
+$env:UML_TEST_ESQUEMA_LEGADO = if ($EsquemaLegado) { 'true' } else { 'false' }
 $env:JAVA_HOME = 'C:/Program Files/Android/Android Studio/jbr'
 $env:UML_COMPILACION_MAVEN_HOME = $mavenFlujos
 $env:UML_COMPILACION_REPOSITORIO = Join-Path $raizFlujos '.qa/maven-repository'

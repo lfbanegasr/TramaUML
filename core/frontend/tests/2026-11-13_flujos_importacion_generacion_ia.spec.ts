@@ -108,115 +108,114 @@ const informe = {
   sha256: 'prueba',
 };
 
-test('prepara las clases como entidades sin editar el diagrama ni pedir validación UML', async ({
-  page,
-}) => {
-  const clase = {
-    idClase: 'clase',
-    nombre: 'Cliente',
-    seleccionada: true,
-    esPersistente: false,
-    exponerRest: true,
-    nombreTabla: 'cliente',
-    nombreEntidad: 'Cliente',
-    operaciones: [],
-  };
-  let cfg = {
-    ...configuracion('actual', false),
-    clases: [clase],
-    mensajes: [
-      {
-        nivel: 'ERROR',
-        codigo: 'SIN_ENTIDADES_PERSISTENTES',
-        mensaje: 'Selecciona al menos una clase persistente para generar código.',
-      },
-    ],
-  };
-  let guardados = 0,
-    generado = false;
-  const inesperadas: string[] = [];
-  await page.route('**/api/**', async (route) => {
-    const req = route.request(),
-      url = new URL(req.url());
-    if (!url.pathname.startsWith('/api/')) return route.continue();
-    if (url.pathname.endsWith('/csrf'))
-      return route.fulfill({ json: { token: 'prueba', header: 'X-CSRF' } });
-    if (url.pathname.endsWith('/configuracion')) {
-      if (req.method() === 'PUT') {
-        guardados++;
-        const cuerpo = req.postDataJSON();
-        expect(cuerpo.clases[0].esPersistente).toBe(true);
-        cfg = {
-          ...cfg,
-          ...cuerpo,
-          mensajes: [
-            {
-              nivel: 'ADVERTENCIA',
-              codigo: 'CLASE_SIN_ID',
-              mensaje: 'Se generará un identificador técnico Long en el backend.',
-            },
-          ],
-        };
-      }
-      return route.fulfill({
-        json: { ...cfg, id: 'cfg-' + guardados, puedeGenerar: guardados > 0 },
-      });
-    }
-    if (url.pathname.endsWith('/generar')) {
-      generado = true;
-      return route.fulfill({
-        json: {
-          idGeneracion: 'g',
-          idConfiguracion: 'cfg',
-          idVersionModelo: 'actual',
-          nombreArchivo: 'backend.zip',
-          totalClases: 1,
-          totalOperaciones: 0,
-          totalArchivosGenerados: 12,
-        },
-      });
-    }
-    if (url.pathname.endsWith('/generacion'))
-      return route.fulfill({
-        json: generado
-          ? [
-              {
-                idGeneracion: 'g',
-                idConfiguracion: 'cfg',
-                idVersionModelo: 'actual',
-                numeroVersion: 2,
-                nombreArchivo: 'backend.zip',
-                creadoEn: '2026-11-13T10:00:00Z',
-                validacion: null,
-                puedeValidar: true,
-              },
-            ]
-          : [],
-      });
-    inesperadas.push(url.pathname);
-    return route.fulfill({
-      status: 500,
-      json: { mensaje: 'No se esperaba editar ni validar UML.' },
-    });
-  });
-  await abrirComponente(
+for (const guardarAntes of [false, true]) {
+  test(`prepara entidades y genera ${guardarAntes ? 'tras guardar' : 'directamente'} sin editar el diagrama`, async ({
     page,
-    'interoperabilidad/components/GenerarBackendDialog',
-    `{modelo:'m',nombreModelo:'Prueba',cerrar:()=>{}}`,
-  );
-  await page
-    .getByRole('button', { name: 'Preparar clases seleccionadas como entidades', exact: true })
-    .click();
-  await expect(
-    page.getByText(
-      'Clases seleccionadas preparadas como entidades del backend. El diagrama UML no cambió.',
-    ),
-  ).toBeVisible();
-  await page.getByRole('button', { name: 'Guardar y generar', exact: true }).click();
-  await expect(page.getByText('Proyecto generado desde una versión UML congelada')).toBeVisible();
-  expect(guardados).toBe(2);
-  expect(inesperadas).toEqual([]);
-});
+  }) => {
+    const clase = {
+      idClase: 'clase',
+      nombre: 'Cliente',
+      seleccionada: true,
+      esPersistente: false,
+      exponerRest: true,
+      nombreTabla: 'cliente',
+      nombreEntidad: 'Cliente',
+      operaciones: [],
+    };
+    let cfg = {
+      ...configuracion('actual', false),
+      clases: [clase],
+      mensajes: [
+        {
+          nivel: 'ERROR',
+          codigo: 'SIN_ENTIDADES_PERSISTENTES',
+          mensaje: 'Selecciona al menos una clase persistente para generar código.',
+        },
+      ],
+    };
+    let guardados = 0,
+      generado = false;
+    const inesperadas: string[] = [];
+    await page.route('**/api/**', async (route) => {
+      const req = route.request(),
+        url = new URL(req.url());
+      if (!url.pathname.startsWith('/api/')) return route.continue();
+      if (url.pathname.endsWith('/csrf'))
+        return route.fulfill({ json: { token: 'prueba', header: 'X-CSRF' } });
+      if (url.pathname.endsWith('/configuracion')) {
+        if (req.method() === 'PUT') {
+          guardados++;
+          const cuerpo = req.postDataJSON();
+          expect(cuerpo.clases[0].esPersistente).toBe(true);
+          cfg = {
+            ...cfg,
+            ...cuerpo,
+            estado: 'VALIDO',
+            mensajes: [
+              {
+                nivel: 'ADVERTENCIA',
+                codigo: 'CLASE_SIN_ID',
+                mensaje: 'Se generará un identificador técnico Long en el backend.',
+              },
+            ],
+          };
+        }
+        return route.fulfill({
+          json: { ...cfg, id: 'cfg-' + guardados, puedeGenerar: guardados > 0 },
+        });
+      }
+      if (url.pathname.endsWith('/generar')) {
+        generado = true;
+        return route.fulfill({
+          json: {
+            idGeneracion: 'g',
+            idConfiguracion: 'cfg',
+            idVersionModelo: 'actual',
+            nombreArchivo: 'backend.zip',
+            totalClases: 1,
+            totalOperaciones: 0,
+            totalArchivosGenerados: 12,
+          },
+        });
+      }
+      if (url.pathname.endsWith('/generacion'))
+        return route.fulfill({
+          json: generado
+            ? [
+                {
+                  idGeneracion: 'g',
+                  idConfiguracion: 'cfg',
+                  idVersionModelo: 'actual',
+                  numeroVersion: 2,
+                  nombreArchivo: 'backend.zip',
+                  creadoEn: '2026-11-13T10:00:00Z',
+                  validacion: null,
+                  puedeValidar: true,
+                },
+              ]
+            : [],
+        });
+      inesperadas.push(url.pathname);
+      return route.fulfill({
+        status: 500,
+        json: { mensaje: 'No se esperaba editar ni validar UML.' },
+      });
+    });
+    await abrirComponente(
+      page,
+      'interoperabilidad/components/GenerarBackendDialog',
+      `{modelo:'m',nombreModelo:'Prueba',cerrar:()=>{}}`,
+    );
+    if (guardarAntes) {
+      await page.getByRole('button', { name: 'Guardar ajustes', exact: true }).click();
+      await expect(page.getByText(/Ajustes guardados para la versi/)).toBeVisible();
+    }
+    await page.getByRole('button', { name: 'Generar backend', exact: true }).click();
+    await expect(page.getByText('Proyecto generado desde una versión UML congelada')).toBeVisible();
+    expect(guardados).toBe(1);
+    expect(inesperadas).toEqual([]);
+  });
+}
 
 test('un ZIP aprobado se descarga durante otra comprobación y después de un fallo', async ({
   page,
@@ -377,6 +376,7 @@ test('genera sin validar UML, conserva ajustes y permite regenerar y descargar',
           ...configuracion(cfg.idVersionModelo, validada),
           ...cfg,
           id: 'cfg',
+          estado: 'VALIDO',
           puedeGenerar: true,
         };
       } else {
@@ -428,7 +428,7 @@ test('genera sin validar UML, conserva ajustes y permite regenerar y descargar',
   );
   await page.getByLabel('Versión del modelo').selectOption('anterior');
   await page.getByLabel('Group ID').fill('bo.edu.personalizado');
-  await page.getByRole('button', { name: 'Guardar y generar', exact: true }).click();
+  await page.getByRole('button', { name: 'Generar backend', exact: true }).click();
   await expect(page.getByText('Proyecto generado desde una versión UML congelada')).toBeVisible();
   expect(versionesValidadas).toEqual([]);
   expect(guardadas[0]).toMatchObject({
@@ -438,10 +438,7 @@ test('genera sin validar UML, conserva ajustes y permite regenerar y descargar',
   await expect(page.getByLabel('Versión del modelo')).toHaveValue('anterior');
   await page.getByRole('button', { name: 'Volver a generar esta versión' }).click();
   await expect.poll(() => generaciones.length).toBe(2);
-  expect(guardadas[1]).toMatchObject({
-    idVersionModelo: 'anterior',
-    idGrupo: 'bo.edu.personalizado',
-  });
+  expect(guardadas).toHaveLength(1);
   const descarga = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Validar y descargar ZIP', exact: true }).click();
   expect((await descarga).suggestedFilename()).toBe('prueba-v1.zip');

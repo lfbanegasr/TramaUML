@@ -109,6 +109,14 @@ public class GeneracionRepositorio {
                         Boolean.class));
     }
 
+    /** Compatibilidad con instalaciones que todavía conservan la política anterior. */
+    public boolean requiereValidacionLegada() {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+                "select position('version_status' in pg_get_functiondef("
+                        + "'uml_colaborativo.verificar_configuracion_generacion()'::regprocedure)) > 0",
+                Map.of(), Boolean.class));
+    }
+
     public List<VersionGeneracion> listarVersiones(UUID modelo, UUID actual) {
         return jdbc.query(
                 "select id,numero_version,revision,estado_validacion from "
@@ -239,16 +247,15 @@ public class GeneracionRepositorio {
             String estado) {
         // Cada guardado conserva una configuración independiente; las anteriores siguen utilizables.
         UUID id = UUID.randomUUID();
-        jdbc.update(
-                "insert into uml_colaborativo.configuracion_generacion_backend"
+        String insertar = "insert into uml_colaborativo.configuracion_generacion_backend"
                     + "(id,id_version_modelo,nombre,nombre_proyecto,id_grupo,id_artefacto,"
                     + "paquete_base,version_inicial,version_java,version_spring_boot,"
                     + "motor_base_datos,herramienta_migracion,generar_repositorios,"
                     + "generar_servicios,generar_controladores,generar_dtos,exponer_rest,plantilla_conexion,estado,creado_por)"
                     + " values(:id,:version,:nombre,"
                     + ":proyecto,:grupo,:artefacto,:paquete,:inicial,:java,:spring,'POSTGRESQL',:migracion,:repos,:servicios,:controladores,:dtos,:rest,cast(:plantilla"
-                    + " as jsonb),:estado,:actor)",
-                new MapSqlParameterSource()
+                    + " as jsonb),:estado,:actor) on conflict do nothing";
+        var parametros = new MapSqlParameterSource()
                         .addValue("id", id)
                         .addValue("version", version)
                         .addValue("nombre", cfg.nombre())
@@ -267,7 +274,15 @@ public class GeneracionRepositorio {
                         .addValue("rest", cfg.exponerRest())
                         .addValue("plantilla", plantillaJson)
                         .addValue("estado", estado)
-                        .addValue("actor", actor));
+                        .addValue("actor", actor);
+        if (jdbc.update(insertar, parametros) == 0) {
+            // La base anterior exige (versión,nombre) único. Conservar la fila anterior y
+            // asignar un nombre físico distinto; el nombre visible se guarda en la plantilla.
+            String nombre = cfg.nombre().substring(0, Math.min(cfg.nombre().length(), 140))
+                    + " [" + id + "]";
+            if (jdbc.update(insertar, parametros.addValue("nombre", nombre)) != 1)
+                throw new ApiException(409, "No se pudo reservar la configuración. Reintenta el guardado.");
+        }
 
         for (SeleccionClase clase : clases) {
             if (!clase.seleccionada()) continue;
@@ -411,11 +426,12 @@ public class GeneracionRepositorio {
 
     private ConfiguracionPersistida configurar(java.sql.ResultSet r) throws java.sql.SQLException {
         try {
+            JsonNode plantilla = json.readTree(r.getString("plantilla_conexion"));
             return new ConfiguracionPersistida(
                     r.getObject("id", UUID.class),
                     r.getObject("id_version_modelo", UUID.class),
                     r.getString("estado"),
-                    r.getString("nombre"),
+                    plantilla.path("nombreConfiguracion").asText(r.getString("nombre")),
                     r.getString("nombre_proyecto"),
                     r.getString("id_grupo"),
                     r.getString("id_artefacto"),
@@ -429,7 +445,7 @@ public class GeneracionRepositorio {
                     r.getBoolean("generar_controladores"),
                     r.getBoolean("generar_dtos"),
                     r.getBoolean("exponer_rest"),
-                    json.readTree(r.getString("plantilla_conexion")));
+                    plantilla);
         } catch (JsonProcessingException e) {
             throw new ApiException(422, "La configuración guardada no puede interpretarse.");
         }

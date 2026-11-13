@@ -4117,6 +4117,56 @@ class NucleoIntegracionTest {
   }
 
   @Test
+  void guardarYGenerarConRestriccionesAnteriores() throws Exception {
+    var actor = login(usuario, clave);
+    String modelo = proyecto(actor).path("idModelo").asText();
+    UUID claseId = UUID.randomUUID();
+    enviar(actor, modelo, cambio(1, UUID.randomUUID(), clase(claseId, "Cliente"),
+        Map.of("operacion", "CREAR", "entidad", "ATRIBUTO", "idEntidad", UUID.randomUUID(),
+            "datos", Map.of("idClase", claseId, "nombre", "nombre", "tipoUml", "String"))))
+        .andExpect(status().isOk());
+    String ruta = "/api/modelos/" + modelo;
+    var vista = respuesta(mvc.perform(autorizado(get(ruta + "/generacion/configuracion"), actor))
+        .andExpect(status().isOk()));
+    var cuerpo = json.createObjectNode();
+    for (String campo : List.of("idVersionModelo", "nombre", "nombreProyecto", "idGrupo", "idArtefacto",
+        "paqueteBase", "versionInicial", "generarRepositorios", "generarServicios", "generarControladores",
+        "generarDtos", "exponerRest")) cuerpo.set(campo, vista.get(campo));
+    cuerpo.set("clases", json.valueToTree(List.of(Map.of("idClase", claseId, "seleccionada", true,
+        "esPersistente", true, "exponerRest", true))));
+    var primera = respuesta(escribir(actor, put(ruta + "/generacion/configuracion"), cuerpo)
+        .andExpect(status().isOk()).andExpect(jsonPath("$.puedeGenerar").value(true)));
+    var segunda = respuesta(escribir(actor, put(ruta + "/generacion/configuracion"), cuerpo)
+        .andExpect(status().isOk()).andExpect(jsonPath("$.puedeGenerar").value(true)));
+    assertThat(segunda.path("id").asText()).isNotEqualTo(primera.path("id").asText());
+    assertThat(segunda.path("nombre").asText()).isEqualTo(primera.path("nombre").asText());
+    boolean legado = "true".equals(System.getenv("UML_TEST_ESQUEMA_LEGADO"));
+    int restricciones = jdbc.queryForObject("select count(*) from pg_constraint where conname='uq_configuracion_generacion_backend_01'", Integer.class);
+    assertThat(restricciones).isEqualTo(legado ? 1 : 0);
+    if (legado) {
+      var nombres = jdbc.queryForList("select nombre from uml_colaborativo.configuracion_generacion_backend where id_version_modelo=?", String.class,
+          UUID.fromString(primera.path("idVersionModelo").asText()));
+      assertThat(nombres).hasSize(2).doesNotHaveDuplicates().allMatch(n -> n.length() <= 180);
+    }
+    var generada = respuesta(escribir(actor, post(ruta + "/generacion/generar"),
+        Map.of("idConfiguracion", primera.path("id").asText())).andExpect(status().isOk()));
+    escribir(actor, post(ruta + "/generacion/generar"), Map.of("idConfiguracion", segunda.path("id").asText()))
+        .andExpect(status().isOk());
+    escribir(actor, post(ruta + "/generacion/generar"), Map.of("idConfiguracion", primera.path("id").asText()))
+        .andExpect(status().isOk());
+    assertThat(jdbc.queryForObject("select count(*) from uml_colaborativo.validacion_modelo where id_modelo=?",
+        Integer.class, UUID.fromString(modelo))).isEqualTo(legado ? 1 : 0);
+    assertThat(jdbc.queryForObject("select estado from uml_colaborativo.configuracion_generacion_backend where id=?",
+        String.class, UUID.fromString(primera.path("id").asText()))).isEqualTo("VALIDO");
+    String generacion = generada.path("idGeneracion").asText();
+    completarValidacionBackend(actor, modelo, generacion);
+    mvc.perform(autorizado(get(ruta + "/generacion/" + generacion + "/descargar"), actor))
+        .andExpect(status().isOk());
+    mvc.perform(autorizado(get(ruta), actor)).andExpect(status().isOk())
+        .andExpect(jsonPath("$.revision").value(2)).andExpect(jsonPath("$.atributos.length()").value(1));
+  }
+
+  @Test
   void guardarMismoNombreGenerarSinValidarYDescargarDuranteRevalidacion() throws Exception {
     var actor = login(usuario, clave);
     String modelo = proyecto(actor).path("idModelo").asText();

@@ -110,7 +110,7 @@ test('configura, genera, valida y descarga un backend desde el editor', async ({
   await page.getByLabel('Group ID').fill('bo.edu.prueba');
   await page.getByLabel('Artifact ID').fill('backend-prueba');
   await page.getByLabel('Paquete base Java').fill('bo.edu.prueba.backend');
-  await page.getByRole('button', { name: 'Guardar y generar', exact: true }).click();
+  await page.getByRole('button', { name: 'Generar backend', exact: true }).click();
   const panel = page.getByRole('region', { name: 'Validación del backend' });
   await expect(panel.getByRole('button', { name: 'Descargar ZIP validado' })).toBeDisabled();
   await panel.getByRole('button', { name: 'Validar backend', exact: true }).click();

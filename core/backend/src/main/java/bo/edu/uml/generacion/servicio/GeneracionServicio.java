@@ -17,6 +17,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import bo.edu.uml.validacion.servicio.ValidacionServicio;
+import bo.edu.uml.validacion.servicio.ProcesarValidacion;
 
 import java.io.ByteArrayInputStream;
 import java.text.Normalizer;
@@ -43,16 +47,25 @@ public class GeneracionServicio {
     private final MotorGeneracionSpringBoot motor;
     private final ObjectMapper json;
     private final ValidacionBackendServicio validaciones;
+    private final ValidacionServicio validacionModelo;
+    private final ProcesarValidacion procesadorModelo;
+    private final TransactionTemplate transacciones;
 
     public GeneracionServicio(
             GeneracionRepositorio repo,
             MotorGeneracionSpringBoot motor,
             ObjectMapper json,
-            ValidacionBackendServicio validaciones) {
+            ValidacionBackendServicio validaciones,
+            ValidacionServicio validacionModelo,
+            ProcesarValidacion procesadorModelo,
+            PlatformTransactionManager gestorTransacciones) {
         this.repo = repo;
         this.motor = motor;
         this.json = json;
         this.validaciones = validaciones;
+        this.validacionModelo = validacionModelo;
+        this.procesadorModelo = procesadorModelo;
+        this.transacciones = new TransactionTemplate(gestorTransacciones);
     }
 
     @Transactional(readOnly = true)
@@ -97,7 +110,7 @@ public class GeneracionServicio {
                         preparacion.mapeos(),
                         preparacion.dependencias(),
                         preparacion.persistencia(),
-                        plantilla(preparacion.clases()),
+                        plantilla(preparacion.clases(), cfg.nombre()),
                         estado);
         ConfiguracionPersistida guardada = repo.leerConfiguracion(modelo, id, false);
         return vista(
@@ -107,8 +120,36 @@ public class GeneracionServicio {
                 repo.listarVersiones(modelo, cabecera.idVersionActual()));
     }
 
-    @Transactional
     public ResultadoGeneracion generar(
+            Identidad actor, UUID modelo, SolicitudGeneracion solicitud) {
+        // La comprobación de compatibilidad se confirma antes de abrir la transacción del ZIP.
+        // Nunca se marca una versión como válida sin evaluarla con el motor semántico real.
+        var preparada = transacciones.execute(s -> {
+            CabeceraModelo c = repo.cabecera(modelo);
+            autorizar(actor, c, "GENERAR_BACKEND", "generar el backend");
+            ConfiguracionPersistida configuracion = solicitud == null || solicitud.idConfiguracion() == null
+                    ? repo.leerConfiguracion(modelo, c.idVersionActual())
+                        .orElseThrow(() -> new ApiException(422, "Guarda una configuración antes de generar."))
+                    : repo.leerConfiguracion(modelo, solicitud.idConfiguracion(), false);
+            if (!"VALIDO".equals(configuracion.estado()))
+                throw new ApiException(422, "Revisa la configuración del backend antes de generar.");
+            var version = repo.version(modelo, configuracion.idVersionModelo(), c.idVersionActual());
+            UUID tarea = null;
+            if (repo.requiereValidacionLegada()
+                    && !Set.of("VALIDO", "VALIDO_CON_ADVERTENCIAS").contains(version.resumen().estadoValidacion())) {
+                var aceptada = (Map<?, ?>) validacionModelo.solicitar(actor, modelo, configuracion.idVersionModelo());
+                tarea = (UUID) aceptada.get("id");
+            }
+            return new PreparacionLegada(configuracion.id(), tarea);
+        });
+        if (preparada.validacion() != null) procesadorModelo.procesar(preparada.validacion());
+        return transacciones.execute(s -> generarConfirmado(actor, modelo,
+                new SolicitudGeneracion(preparada.configuracion())));
+    }
+
+    private record PreparacionLegada(UUID configuracion, UUID validacion) {}
+
+    private ResultadoGeneracion generarConfirmado(
             Identidad actor, UUID modelo, SolicitudGeneracion solicitud) {
         CabeceraModelo cabecera = repo.cabecera(modelo);
         autorizar(actor, cabecera, "GENERAR_BACKEND", "generar el backend");
@@ -131,6 +172,11 @@ public class GeneracionServicio {
 
         VersionSnapshot version =
                 repo.version(modelo, cfg.idVersionModelo(), cabecera.idVersionActual());
+        if (repo.requiereValidacionLegada()
+                && !Set.of("VALIDO", "VALIDO_CON_ADVERTENCIAS").contains(version.resumen().estadoValidacion()))
+            throw new ApiException(422,
+                    "La comprobación automática detectó errores UML en esta versión."
+                    + " Abre el informe de validación para ver los errores concretos.");
 
         List<ClasePersistida> seleccion = repo.clasesConfiguracion(cfg.id());
         if (seleccion.isEmpty())
@@ -869,7 +915,7 @@ public class GeneracionServicio {
         return new Dependencia(grupo, artefacto, version, "COMPILACION", true);
     }
 
-    private String plantilla(List<SeleccionClase> clases) {
+    private String plantilla(List<SeleccionClase> clases, String nombre) {
         boolean seleccionExplicita = clases.stream().anyMatch(c -> c.operaciones() != null);
         List<String> operaciones =
                 clases.stream()
@@ -882,6 +928,7 @@ public class GeneracionServicio {
         try {
             return json.writeValueAsString(
                     Map.of(
+                            "nombreConfiguracion", nombre,
                             "operacionesSeleccionadas",
                             operaciones,
                             "seleccionOperacionesExplicita",
